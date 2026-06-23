@@ -38,13 +38,13 @@ Key ideas:
 Dimension order of the array is ``prec[S][L][M][Y][X]``.
 """
 import os
-import urllib.parse
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
 from eccas_s2s.io._base import http_download
+from eccas_s2s.io.iridl import fmt_lon as _fmt_lon, fmt_lat as _fmt_lat, encode, decode_months_since
 
 IRIDL_ROOT = "https://iridl.ldeo.columbia.edu/SOURCES/.Models/.NMME"
 
@@ -68,20 +68,7 @@ NMME_VARIABLES = {
     "TEMP": ("tref", "tref"),   # K (2 m temperature)
 }
 
-_MONTH_EPOCH = pd.Timestamp("1960-01-01")
-
-
-# ----------------------------------------------------------------------------------
-# coordinate token formatting
-# ----------------------------------------------------------------------------------
-def _fmt_lon(v):
-    return f"({abs(v):g}{'E' if v >= 0 else 'W'})"
-
-
-def _fmt_lat(v):
-    return f"({abs(v):g}{'N' if v >= 0 else 'S'})"
-
-
+# coordinate-token formatting (_fmt_lon/_fmt_lat/encode) is shared via io.iridl.
 def _fmt_start(date):
     """Format a date as the IRIDL start token, e.g. '(0000 1 Jun 2000)'."""
     d = pd.Timestamp(date)
@@ -90,9 +77,7 @@ def _fmt_start(date):
 
 def decode_S(months_since_1960):
     """Decode IRIDL ``S`` values ('months since 1960-01-01') to month-start Timestamps."""
-    out = [_MONTH_EPOCH + pd.DateOffset(months=int(round(float(m))))
-           for m in np.atleast_1d(months_since_1960)]
-    return pd.DatetimeIndex(out)
+    return decode_months_since(months_since_1960, "months since 1960-01-01")
 
 
 # ----------------------------------------------------------------------------------
@@ -128,7 +113,7 @@ def build_nmme_url(model, variable, start, area,
     url += "/dods" if fmt == "dods" else "/data.nc"
 
     # percent-encode spaces (and only spaces) inside the value tokens
-    return url.replace(" ", "%20")
+    return encode(url)
 
 
 # ----------------------------------------------------------------------------------

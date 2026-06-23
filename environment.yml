@@ -10,7 +10,7 @@ name: eccas-s2s
 
 channels:
   - conda-forge
-  - defaults
+  - nodefaults
 
 dependencies:
   # --- Core ---
@@ -51,10 +51,9 @@ dependencies:
 
   # --- Acquisition ---
   - cdsapi
-  - earthkit
 
-  # --- Visualization ---
-  - matplotlib=3.7.*
+  # --- Visualization (matplotlib-base: headless, no Qt) ---
+  - matplotlib-base=3.7.*
   - seaborn
 
   # --- Utilities / notebooks ---
