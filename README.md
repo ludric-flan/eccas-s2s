@@ -11,8 +11,7 @@ seasonal/sub-seasonal climate drivers.
 > *methodological* inspiration from open seasonal-forecasting work (notably
 > [WASS2S](https://github.com/hmandela/WASS2S) for West Africa) but shares **no source
 > code** with it: each processing step is re-implemented from the underlying published
-> method. License: **TBD** (choose before going public — a permissive license such as
-> MIT or Apache-2.0 is recommended to keep the tool independent).
+> method. Licensed under **Apache-2.0** (see [LICENSE](LICENSE)).
 
 ## Two product lines, one data layer
 
@@ -85,3 +84,7 @@ pip install -e .
 python -c "import eccas_s2s; print(eccas_s2s.__version__)"
 pytest
 ```
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
