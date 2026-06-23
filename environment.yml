@@ -1,0 +1,71 @@
+# Conda environment for eccas-s2s.
+#
+# The geospatial / climate stack (eccodes, cfgrib, cartopy, gdal, esmpy, cdo) is far
+# easier to install via conda-forge than pip. These pins mirror a known-good seasonal
+# forecasting stack; adjust as the tool grows.
+#
+#   conda env create -f environment.yml
+#   conda activate eccas-s2s
+name: eccas-s2s
+
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  # --- Core ---
+  - python=3.11
+  - pip
+  - numpy=1.26.*
+  - scipy=1.11.*
+  - pandas=2.2.*
+  - scikit-learn=1.5.*
+  - statsmodels
+
+  # --- IO / parallel ---
+  - dask
+  - distributed
+  - netcdf4
+  - h5netcdf
+  - cfgrib
+  - eccodes
+  - cftime
+  - bottleneck
+
+  # --- Spatial / geo ---
+  - geopandas
+  - shapely
+  - pyproj
+  - rioxarray
+  - rasterio
+  - regionmask
+  - cartopy=0.25.*
+  - xesmf
+  - esmpy
+
+  # --- Climate / verification ---
+  - xarray>=2024.6
+  - cf_xarray
+  - xskillscore
+  - properscoring
+
+  # --- Acquisition ---
+  - cdsapi
+  - earthkit
+
+  # --- Visualization ---
+  - matplotlib=3.7.*
+  - seaborn
+
+  # --- Utilities / notebooks ---
+  - psutil
+  - tqdm
+  - ipython
+  - ipykernel
+  - jupyterlab
+  - ipywidgets
+
+  # --- Dev ---
+  - pytest
+  - black
+  - ruff

@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eccas-s2s"
+version = "0.1.0"
+description = "Seasonal and sub-seasonal climate forecasting tool for the ECCAS region (CAPC RCC)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "TBD" }
+authors = [
+    { name = "CAPC — ECCAS Regional Climate Centre" },
+]
+keywords = [
+    "climate",
+    "seasonal forecasting",
+    "sub-seasonal forecasting",
+    "ECCAS",
+    "CEEAC",
+    "Central Africa",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+# Core runtime dependencies. Geospatial/eccodes stack (cfgrib, cartopy, gdal, esmpy)
+# is best installed via conda — see environment.yml.
+dependencies = [
+    "numpy",
+    "pandas",
+    "xarray",
+    "dask",
+    "scipy",
+    "scikit-learn",
+    "matplotlib",
+    "netCDF4",
+    "cfgrib",
+    "cartopy",
+    "geopandas",
+    "shapely",
+    "rioxarray",
+    "regionmask",
+    "xskillscore",
+    "cdsapi",
+    "psutil",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "black", "ruff"]
+
+[project.urls]
+Repository = "https://github.com/ECCAS-CAPC/eccas-s2s"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["eccas_s2s*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

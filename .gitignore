@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Environments
+.venv/
+env/
+.env
+
+# Data — never commit raw forecast / observation data
+*.grib
+*.grib2
+*.idx
+*.nc
+*.nc4
+*.zarr/
+grib_files/
+data/*.shp
+data/*.tif
+
+# Outputs
+*.png
+*.pdf
+PREVISIONS_*/
+outputs/
+
+# OS / editor
+.DS_Store
+*.swp
+*.kate-swp
