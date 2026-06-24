@@ -23,6 +23,7 @@ dependencies:
   - statsmodels
 
   # --- IO / parallel ---
+  - openpyxl          # read CDT/CPT station files saved as .xlsx
   - dask
   - distributed
   - netcdf4

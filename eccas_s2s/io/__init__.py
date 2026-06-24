@@ -3,7 +3,10 @@
 All readers normalize to the canonical xarray layout (longitude/latitude, number,
 decoded datetimes) defined in ``_base`` / ``iridl``.
 """
-from eccas_s2s.io import iridl, nmme, c3s, era5, chirps, tamsat  # noqa: F401
+from eccas_s2s.io import iridl, nmme, c3s, era5, chirps, tamsat, obs_stations  # noqa: F401
+from eccas_s2s.io.obs_stations import (  # noqa: F401
+    load_stations, read_station_file, parse_cdt, parse_cpt,
+)
 from eccas_s2s.io.nmme import (  # noqa: F401
     build_nmme_url, download_nmme, open_nmme, load_nmme,
     NMME_MODELS, NMME_VARIABLES, decode_S,
