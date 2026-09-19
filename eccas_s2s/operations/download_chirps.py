@@ -29,17 +29,23 @@ BOX = {"lon": (5.0, 35.0), "lat": (-20.0, 25.0)}
 
 
 def subset_to_box(src: Path, dest: Path) -> Path:
-    """Cut a global CHIRPS daily file to the ECCAS box (cell centres strictly inside)."""
-    with xr.open_dataset(src, chunks={"time": 31}) as ds:
+    """
+    Cut a global CHIRPS daily file to the ECCAS box (cell centres strictly inside).
+
+    The subset is read fully into memory (~0.8 GB per year) before writing:
+    reading with dask while writing NetCDF in the same process can deadlock the
+    HDF5 library (observed on 2026-09-19).
+    """
+    with xr.open_dataset(src) as ds:
         lat, lon = ds["latitude"], ds["longitude"]
         sub = ds.sel(latitude=lat[(lat > BOX["lat"][0]) & (lat < BOX["lat"][1])],
                      longitude=lon[(lon > BOX["lon"][0]) & (lon < BOX["lon"][1])])
-        sub = sub.sortby("latitude")
-        enc = {"precip": {"zlib": True, "complevel": 4, "dtype": "float32",
-                          "_FillValue": np.float32(-9999.0),
-                          "chunksizes": (1, sub.sizes["latitude"], sub.sizes["longitude"])}}
-        tmp = dest.with_suffix(".tmp.nc")
-        sub.to_netcdf(tmp, encoding=enc)
+        sub = sub.sortby("latitude").load()
+    enc = {"precip": {"zlib": True, "complevel": 4, "dtype": "float32",
+                      "_FillValue": np.float32(-9999.0),
+                      "chunksizes": (1, sub.sizes["latitude"], sub.sizes["longitude"])}}
+    tmp = dest.with_suffix(".tmp.nc")
+    sub.to_netcdf(tmp, encoding=enc)
     tmp.replace(dest)
     return dest
 
