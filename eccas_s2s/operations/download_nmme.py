@@ -24,6 +24,23 @@ from eccas_s2s.provenance import RunContext
 from eccas_s2s.settings import load_cycle
 
 
+def disk_summary(cfg) -> pd.DataFrame:
+    """Files present on disk for every configured model and variable (whatever was re-run)."""
+    nmme = cfg.raw["systems"]["nmme"]
+    dest = cfg.raw_dir("nmme")
+    rows = []
+    for model, spec in nmme["models"].items():
+        for var in nmme["variables"]:
+            years = sorted(int(f.name.split(".")[-4][:4]) for f in (dest / model).glob(f"{model}.{var}.*.nc"))
+            hind = [y for y in years if y < cfg.init_date.year]
+            rows.append({"model": model, "label": spec["label"], "variable": var,
+                         "hindcast_first": min(hind) if hind else None,
+                         "hindcast_last": max(hind) if hind else None,
+                         "n_hindcast_years": len(hind),
+                         "forecast_present": cfg.init_date.year in years, "files": len(years)})
+    return pd.DataFrame(rows)
+
+
 def run(config: str, models=None, variables=None, workers: int = 6) -> RunContext:
     cfg = load_cycle(config)
     nmme = cfg.raw["systems"]["nmme"]
@@ -70,7 +87,7 @@ def run(config: str, models=None, variables=None, workers: int = 6) -> RunContex
                                 "n_hindcast_years": len(hindcast),
                                 "forecast_present": cfg.init_date.year in years,
                                 "files_ok": n_ok})
-        table = pd.DataFrame(summary)
+        table = disk_summary(cfg)
         out = dest / "nmme_download_summary.csv"
         dest.mkdir(parents=True, exist_ok=True)
         table.to_csv(out, index=False)
