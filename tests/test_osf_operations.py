@@ -78,3 +78,13 @@ def test_osf_totals_equal_v2_code_on_shifted_windows():
     acc = v2.accumulate_forecast_over_periods(v2.decumulate_precip_to_mm(raw), pdf)
     acc = acc.transpose("number", "period", "latitude", "longitude")
     assert float(abs(acc.values - osf.values).max()) == 0.0
+
+
+def test_era5_daily_blocks():
+    from eccas_s2s.operations.download_era5_daily import available_months, build_request
+    req = build_request("max", 1996, 2)
+    assert req["daily_statistic"] == "daily_maximum" and req["month"] == ["02"]
+    assert len(req["day"]) == 29 and req["area"] == [25, 5, -20, 35]
+    months = available_months(2025, 2026, today="2026-09-19")
+    assert months[0] == (2025, 1) and months[-1] == (2026, 8)
+    assert len(months) == 20

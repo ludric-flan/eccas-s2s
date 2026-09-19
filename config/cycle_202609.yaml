@@ -51,7 +51,7 @@ observations:
     # Fichiers quotidiens (chemins ou motifs) : 1981–1990 téléchargés par
     # run_download_chirps.py, 1991–2025 fichier CEEAC existant.
     daily_paths:
-      - /home/ludric/Downloads/SVM/Previsions_S2S/DATA_OSF/raw/chirps/daily_p05/chirps-v2.0.19[8]*.days_p05_ECCAS.nc
+      - /home/ludric/Downloads/SVM/Previsions_S2S/DATA_OSF/raw/chirps/daily_p05/chirps-v2.0.*.days_p05_ECCAS.nc
       - /home/ludric/Desktop/Donnees_calibration_c3s/DATA/CHIRPS/TP_CHIRPS_v2.0_DAILY_1991_2025_p05_ECCAS.nc
   temperature:
     source: ERA5-Land
