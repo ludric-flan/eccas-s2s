@@ -88,3 +88,22 @@ def test_era5_daily_blocks():
     months = available_months(2025, 2026, today="2026-09-19")
     assert months[0] == (2025, 1) and months[-1] == (2026, 8)
     assert len(months) == 20
+
+
+def test_era5_hourly_to_daily():
+    import numpy as np
+    import xarray as xr
+    from eccas_s2s.operations.download_era5_hourly import build_request, hourly_to_daily, months_for_year
+    t = pd.date_range("2020-03-01", periods=48, freq="h")
+    vals = 273.15 + 20 + 5 * np.sin(np.arange(48) / 24 * 2 * np.pi)
+    da = xr.DataArray(vals[:, None, None], dims=("time", "latitude", "longitude"),
+                      coords={"time": t, "latitude": [0.0], "longitude": [0.0]})
+    d = hourly_to_daily(da.isel(time=slice(0, 47)))        # 2nd day misses its last hour
+    assert d.sizes["time"] == 2
+    assert float(d.tmax[0]) == pytest.approx(25.0, abs=0.01) and float(d.tmin[0]) == pytest.approx(15.0, abs=0.1)
+    assert float(d.tmean[0]) == pytest.approx(20.0, abs=1e-6)
+    assert np.isnan(float(d.tmax[1])) and d.attrs["days_incomplete"] == 1
+    req = build_request(1981, range(1, 13))
+    assert len(req["time"]) == 24 and req["data_format"] == "grib" and req["area"] == [25, 5, -20, 35]
+    assert months_for_year(2026, today="2026-09-19") == list(range(1, 9))
+    assert months_for_year(2027, today="2026-09-19") == []
