@@ -1,0 +1,34 @@
+# =============================================================================
+# Seuils des produits probabilistes
+# =============================================================================
+# Tous les seuils « climatologiques » sont des percentiles calculés PAR POINT DE
+# GRILLE sur la normale observée 1991–2020 (décisions D12 et D13), recalculés
+# sans l'année vérifiée pendant la validation croisée LOYO.
+# =============================================================================
+
+# Percentiles calculés à chaque maille, pour chaque échelle et chaque période.
+percentiles: [5, 10, 20, 33.33, 50, 66.67, 80, 90, 95]
+
+categories:
+  terciles: [33.33, 66.67]     # BN | NN | AN
+  quintiles_outer: [20, 80]    # P20 (très sec / très frais), P80 (très humide / très chaud)
+  median: 50
+
+precip:
+  # Seuils absolus de cumul (mm) pour les cartes de dépassement.
+  exceedance_mm:
+    decade: [5, 10, 20, 50, 100]
+    month:  [10, 20, 50, 100, 200, 300]
+    season: [50, 100, 200, 300, 400, 500, 600]
+  # Seuil d'anomalie (mm) pour le produit « anomalie seuil ».
+  anomaly_mm: {decade: 15, month: 30, season: 60}
+  # Masque sec : climatologie de la période inférieure à ce cumul (mm).
+  dry_mask_mm: 1.0
+  wet_day_mm: 1.0              # définition d'un jour de pluie
+
+temperature:
+  # Percentiles extrêmes par maille (décision D13).
+  tmax_hot: [90, 95]           # chaleur diurne extrême
+  tmin_warm: [90, 95]          # nuits chaudes
+  tmin_cold: [10, 5]           # nuits froides
+  t2m_outer: [20, 80]          # période anormalement fraîche / chaude

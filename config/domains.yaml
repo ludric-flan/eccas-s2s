@@ -1,0 +1,28 @@
+# =============================================================================
+# Domaine CEEAC et sous-zones climatiques
+# =============================================================================
+# Les sous-zones Nord / Équatoriale / Sud suivent les trois régimes
+# pluviométriques (présentation « Calibration C3S–CHIRPS, Liebmann et
+# indicateurs », CEEAC 2026). Les limites ±5° sont des seuils opérationnels, à
+# remplacer par un masque climatique validé lorsqu'il sera disponible.
+# Convention d'emprise : [lon_min, lon_max, lat_min, lat_max].
+# =============================================================================
+
+domain:
+  name: CEEAC
+  extent: [5.0, 32.0, -19.0, 24.0]     # domaine d'analyse
+  map_extent: [4.0, 36.0, -21.0, 25.0] # emprise des cartes
+
+zones:
+  north:
+    label: "Nord CEEAC"
+    lat: [5.0, 24.0]
+    regime: "monomodal boréal — maximum en août"
+  equatorial:
+    label: "CEEAC équatoriale"
+    lat: [-5.0, 5.0]
+    regime: "bimodal — saisons MAM et SON"
+  south:
+    label: "Sud CEEAC"
+    lat: [-19.0, -5.0]
+    regime: "monomodal austral — saison à cheval sur deux années"

@@ -1,0 +1,115 @@
+# =============================================================================
+# Calendriers des indicateurs de saison (début, fin, séquences sèches/humides)
+# =============================================================================
+# Source : capc_sitroom/seasonal_engine v10 — PRODUCT_PRESETS et
+# PRODUCT_INITIALIZATION_MONTH (décision D14). Valeurs reprises à l'identique.
+#
+# Avertissement repris de v10 : « les fenêtres sont indicatives et doivent être
+# vérifiées avec CHIRPS, TAMSAT ou les observations nationales avant une mise
+# en production ». Révision annuelle prévue (étape E10).
+#
+# Dates au format MM-DD. Une fenêtre dont la fin précède le début (ex. 07-01 →
+# 01-15) est à cheval sur deux années civiles.
+#
+# Champs :
+#   metric            onset | cessation | both | seasonal
+#   reference         fenêtre de calcul de la climatologie (anomalies cumulées)
+#   onset_search      fenêtre de recherche de la date de début
+#   cessation_search  fenêtre de recherche de la date de fin
+#   persistence_days  fenêtre de persistance après le début détecté
+#   min_wet_days      nombre minimal de jours humides dans la persistance
+#   max_dry_spell     séquence sèche maximale tolérée dans la persistance (j)
+#   min_dry_days      jours secs consécutifs confirmant la fin
+#   recommended_init  mois d'initialisation recommandé (v10)
+# =============================================================================
+
+wet_day_mm: 1.0
+
+products:
+  north_onset:
+    label: "Nord CEEAC — début de la saison principale"
+    zone: north
+    metric: onset
+    reference: ["02-01", "07-31"]
+    onset_search: ["03-01", "06-30"]
+    cessation_search: null
+    persistence_days: 20
+    min_wet_days: 6
+    max_dry_spell: 10
+    min_dry_days: 12
+    recommended_init: 2
+
+  north_cessation:
+    label: "Nord CEEAC — fin de la saison principale"
+    zone: north
+    metric: cessation
+    reference: ["06-01", "11-30"]
+    onset_search: null
+    cessation_search: ["08-01", "11-10"]
+    persistence_days: 20
+    min_wet_days: 6
+    max_dry_spell: 10
+    min_dry_days: 12
+    recommended_init: 6
+
+  equatorial_mam:
+    label: "CEEAC équatoriale — première saison MAM"
+    zone: equatorial
+    metric: both
+    reference: ["01-01", "07-15"]
+    onset_search: ["01-15", "04-15"]
+    cessation_search: ["04-01", "06-30"]
+    persistence_days: 15
+    min_wet_days: 6
+    max_dry_spell: 7
+    min_dry_days: 9
+    recommended_init: 1
+
+  equatorial_son:
+    label: "CEEAC équatoriale — seconde saison SON"
+    zone: equatorial
+    metric: both
+    reference: ["07-01", "01-15"]
+    onset_search: ["07-15", "10-31"]
+    cessation_search: ["10-01", "12-31"]
+    persistence_days: 15
+    min_wet_days: 6
+    max_dry_spell: 7
+    min_dry_days: 9
+    recommended_init: 7
+
+  south_onset:
+    label: "Sud CEEAC — début de la saison principale"
+    zone: south
+    metric: onset
+    reference: ["08-01", "01-31"]
+    onset_search: ["09-01", "12-31"]
+    cessation_search: null
+    persistence_days: 20
+    min_wet_days: 6
+    max_dry_spell: 10
+    min_dry_days: 12
+    recommended_init: 8
+
+  south_cessation:
+    label: "Sud CEEAC — fin de la saison principale"
+    zone: south
+    metric: cessation
+    reference: ["12-01", "05-31"]
+    onset_search: null
+    cessation_search: ["02-01", "05-10"]
+    persistence_days: 20
+    min_wet_days: 6
+    max_dry_spell: 10
+    min_dry_days: 12
+    recommended_init: 12
+
+  # Saisons fixes sur tout le domaine : séquences sèches/humides maximales et
+  # cumuls sur la saison (pas de détection de début/fin).
+  ceeac_djf: {label: "Domaine CEEAC — saison DJF", zone: ceeac, metric: seasonal, reference: ["12-01", "02-28"], recommended_init: 10}
+  ceeac_mam: {label: "Domaine CEEAC — saison MAM", zone: ceeac, metric: seasonal, reference: ["03-01", "05-31"], recommended_init: 1}
+  ceeac_jja: {label: "Domaine CEEAC — saison JJA", zone: ceeac, metric: seasonal, reference: ["06-01", "08-31"], recommended_init: 4}
+  ceeac_aso: {label: "Domaine CEEAC — saison ASO", zone: ceeac, metric: seasonal, reference: ["08-01", "10-31"], recommended_init: 6}
+  ceeac_son: {label: "Domaine CEEAC — saison SON", zone: ceeac, metric: seasonal, reference: ["09-01", "11-30"], recommended_init: 7}
+  ceeac_ond: {label: "Domaine CEEAC — saison OND", zone: ceeac, metric: seasonal, reference: ["10-01", "12-31"], recommended_init: 8}
+  ceeac_ndj: {label: "Domaine CEEAC — saison NDJ", zone: ceeac, metric: seasonal, reference: ["11-01", "01-31"], recommended_init: 9}

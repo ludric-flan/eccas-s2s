@@ -1,0 +1,78 @@
+# =============================================================================
+# eccas-s2s — Chaîne OSF CAPC-AC
+# Configuration du cycle opérationnel : initialisation du 1er septembre 2026
+# =============================================================================
+# Ce fichier pilote TOUTE exécution de la chaîne pour ce cycle (règle R2 du
+# workflow). Une copie en est écrite dans le manifeste de chaque exécution.
+# Pour un nouveau mois : copier ce fichier en cycle_YYYYMM.yaml et adapter
+# `cycle.init_date` et, si nécessaire, les numéros de système C3S.
+# =============================================================================
+
+cycle:
+  init_date: "2026-09-01"          # date d'initialisation des prévisions
+  name: "OSF CAPC-AC — initialisation septembre 2026"
+
+# Fichiers de configuration partagés par tous les cycles (chemins relatifs à
+# ce fichier).
+includes:
+  domains: domains.yaml
+  thresholds: thresholds.yaml
+  agro_calendars: agro_calendars.yaml
+
+paths:
+  # Données brutes immuables (téléchargements) — hors du dépôt git.
+  data_root: /home/ludric/Downloads/SVM/Previsions_S2S/DATA_OSF
+  # Sorties de travail (produits, scores, journaux d'exécution).
+  output_root: /home/ludric/Downloads/SVM/Previsions_S2S/OUTPUTS_OSF
+  # Archive des prévisions émises (prérequis de la vérification temps réel).
+  archive_root: /home/ludric/Downloads/SVM/Previsions_S2S/ARCHIVE_OSF
+  shapefile: /home/ludric/Desktop/Donnees_calibration_c3s/pays_cceac_shapefile/ceeac_pays_adm1.shp
+
+# Échelles temporelles des produits (décision D8).
+scales: [decade, month, season]
+
+# Variables traitées (décision D5). La V1 démarre par la pluie ; la température
+# est ajoutée en phase P1.
+variables: [precip, t2m, tmax, tmin]
+
+# Périodes de référence (décisions D4 et D12).
+reference_periods:
+  c3s_fit: [1993, 2016]      # ajustement modèle C3S <-> observations
+  obs_normal: [1991, 2020]   # seuils de catégories communs + anomalies
+
+cross_validation:
+  scheme: loyo               # leave-one-year-out (décision D10)
+
+observations:
+  precip:
+    source: CHIRPS
+    version: "2.0"
+    resolution_deg: 0.05
+    daily_path: /home/ludric/Desktop/Donnees_calibration_c3s/DATA/CHIRPS/TP_CHIRPS_v2.0_DAILY_1991_2025_p05_ECCAS.nc
+  temperature:
+    source: ERA5-Land
+    resolution_deg: 0.1
+    daily_path: null          # à télécharger en phase P1
+
+systems:
+  c3s:
+    dataset: seasonal-original-single-levels
+    hindcast_years: [1993, 2016]
+    # Zone de téléchargement (lon_min, lon_max, lat_min, lat_max) : plus large
+    # que le domaine des observations pour les bords du regrillage.
+    download_area: [-10, 40, -25, 30]
+    # Systèmes valides pour une initialisation au 1er septembre 2026 (repris
+    # de seasonal_engine v10). max_lead_days = horizon quotidien disponible.
+    models:
+      ecmwf:        {system: "51",  label: "ECMWF SEAS5.1",      max_lead_days: 215}
+      ukmo:         {system: "610", label: "UKMO GloSea",        max_lead_days: 215}
+      meteo_france: {system: "9",   label: "Météo-France Sys 9", max_lead_days: 212}  # 215 demandés, 212 reçus
+      dwd:          {system: "22",  label: "DWD GCFS2.2",        max_lead_days: 181}  # 184 demandés, 181 reçus (→ 28 févr.)
+      cmcc:         {system: "4",   label: "CMCC SPS4",          max_lead_days: 184}
+      eccc:         {system: "5",   label: "ECCC GEM5.2-NEMO",   max_lead_days: 214}
+      bom:          {system: "2",   label: "BoM ACCESS-S2",      max_lead_days: 215}
+  nmme:
+    enabled: true             # mensuel uniquement (mois, saisons) — phase P1
+    hindcast: full            # toute la période disponible par modèle (D4)
+    models: [cola_rsmas_ccsm4, cola_rsmas_cesm1, nasa_geoss2s, gfdl_spear,
+             cansips_ic4, ncar_cesm1, ncep_cfsv2]
