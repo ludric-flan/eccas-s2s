@@ -23,12 +23,16 @@ import argparse
 import json
 import time
 
-from eccas_s2s.io.c3s import build_c3s_request, download_c3s
+from eccas_s2s.io.c3s import build_c3s_monthly_request, build_c3s_request, download_c3s
 from eccas_s2s.provenance import RunContext
 from eccas_s2s.settings import load_cycle
 
 #: OSF variable name -> key of eccas_s2s.io.c3s.C3S_VARIABLES
-VARIABLE_KEYS = {"precip": "PRCP", "t2m": "TEMP"}
+VARIABLE_KEYS = {"precip": "PRCP", "t2m": "TEMP", "tmax": "TMAX", "tmin": "TMIN"}
+
+#: variables taken from the C3S *monthly* statistics (months and seasons only):
+#: the 2 m mean temperature (decision of 2026-09-19, lighter than 6-hourly fields).
+MONTHLY_VARIABLES = {"t2m"}
 
 MAX_ATTEMPTS = 5
 
@@ -79,16 +83,21 @@ def run(config: str, variable: str = "precip", kinds=("forecast", "hindcast"),
 
         for centre in selected:
             m = all_models[centre]
+            monthly = variable in MONTHLY_VARIABLES
             leadtime_hours = [str(h) for h in range(24, 24 * m.max_lead_days + 1, 24)]
             for kind in kinds:
                 years = [str(init.year)] if kind == "forecast" else [str(y) for y in cfg.c3s_hindcast_years]
                 what = f"{centre} sys {m.system} {kind}"
-                dataset, request = build_c3s_request(
-                    centre, var_key, years, init.month, area,
-                    system=m.system, leadtime_hours=leadtime_hours)
-                ctx.record_parameter(f"request.{centre}.{kind}", {
-                    "dataset": dataset, **request,
-                    "leadtime_hour": f"24..{24 * m.max_lead_days} (pas 24 h)"})
+                if monthly:
+                    dataset, request = build_c3s_monthly_request(centre, var_key, years, init.month,
+                                                                  area, system=m.system)
+                    shown = dict(request)
+                else:
+                    dataset, request = build_c3s_request(
+                        centre, var_key, years, init.month, area,
+                        system=m.system, leadtime_hours=leadtime_hours)
+                    shown = {**request, "leadtime_hour": f"24..{24 * m.max_lead_days} (pas 24 h)"}
+                ctx.record_parameter(f"request.{centre}.{kind}", {"dataset": dataset, **shown})
                 if dry_run:
                     ctx.log.info("[dry-run] %s : %s", what, json.dumps(
                         {k: v for k, v in request.items() if k != "leadtime_hour"}))
@@ -96,7 +105,8 @@ def run(config: str, variable: str = "precip", kinds=("forecast", "hindcast"),
                 try:
                     path = _with_retry(
                         lambda: download_c3s(centre, var_key, years, init.month, area, str(dest_dir),
-                                             system=m.system, leadtime_hours=leadtime_hours, kind=kind),
+                                             system=m.system, leadtime_hours=leadtime_hours, kind=kind,
+                                             monthly=monthly),
                         ctx.log, what)
                     ctx.record_output(path, role=f"c3s_{variable}_{kind}", centre=centre,
                                       system=m.system, years=f"{years[0]}-{years[-1]}")

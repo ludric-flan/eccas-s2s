@@ -28,22 +28,32 @@ from pathlib import Path
 import pandas as pd
 import xarray as xr
 
-from eccas_s2s.obs.chirps import open_chirps_daily, process_daily, write_totals
+from eccas_s2s.obs.chirps import expand_paths, open_chirps_daily, process_daily, write_totals
 from eccas_s2s.obs.climatology import normals
 from eccas_s2s.obs.regrid import block_average, snap_coords
 from eccas_s2s.provenance import RunContext
 from eccas_s2s.settings import load_cycle
 
 
-def _source_signature(path: Path) -> str:
-    st = path.stat()
-    return f"{path.resolve()}|{st.st_size}|{int(st.st_mtime)}"
+def _source_signature(files) -> str:
+    """Identity of the daily source files (path, size, modification time of each)."""
+    parts = []
+    for f in files:
+        st = Path(f).stat()
+        parts.append(f"{Path(f).resolve()}|{st.st_size}|{int(st.st_mtime)}")
+    return ";".join(parts)
+
+
+def source_files(cfg) -> list[Path]:
+    """Daily CHIRPS files of the configuration (``daily_paths``: files or glob patterns)."""
+    obs = cfg.raw["observations"]["precip"]
+    return expand_paths(obs.get("daily_paths") or obs["daily_path"])
 
 
 def derived_paths(cfg) -> dict[str, Path]:
     """Locations of the CHIRPS derived archives for this configuration."""
     d = cfg.data_root / "derived" / "obs" / "chirps"
-    src = open_chirps_daily(cfg.raw["observations"]["precip"]["daily_path"])
+    src = open_chirps_daily(source_files(cfg))
     t = pd.DatetimeIndex(src["time"].values)
     y0, y1 = t[0].year, t[-1].year
     n0, n1 = cfg.reference_period("obs_normal")
@@ -79,25 +89,27 @@ def load_normals(cfg, resolution: str = "p05") -> xr.Dataset:
 
 def run(config: str, rebuild: bool = False) -> RunContext:
     cfg = load_cycle(config)
-    source = Path(cfg.raw["observations"]["precip"]["daily_path"])
+    sources = source_files(cfg)
     paths = derived_paths(cfg)
-    signature = _source_signature(source)
+    signature = _source_signature(sources)
     thr = cfg.thresholds
     n0, n1 = cfg.reference_period("obs_normal")
 
     with RunContext(cfg, step="obs_chirps") as ctx:
-        ctx.record_input(source, role="chirps_daily")
+        for f in sources:
+            ctx.record_input(f, role="chirps_daily")
         ctx.record_parameter("normal_period", [n0, n1])
         ctx.record_parameter("percentiles", thr["percentiles"])
         ctx.record_parameter("percentile_method", thr["percentile_method"])
-        common = {"source_signature": signature, "source_file": str(source.resolve()),
+        common = {"source_signature": signature,
+                  "source_files": ";".join(str(f.resolve()) for f in sources),
                   **ctx.netcdf_attrs()}
 
         # 1) QC + calendar totals at 0.05° (one streaming pass over the daily file)
         if rebuild or not (_is_current(paths["dekads_p05"], signature)
                            and _is_current(paths["months_p05"], signature) and paths["qc"].exists()):
-            ctx.log.info("lecture de %s mois par mois (QC + cumuls décadaires et mensuels)", source.name)
-            da = open_chirps_daily(source)
+            ctx.log.info("lecture de %d fichier(s) CHIRPS mois par mois (QC + cumuls)", len(sources))
+            da = open_chirps_daily(sources)
             qc, dekads, months = process_daily(
                 da, progress=lambda y, m: ctx.log.info("  %d-%02d", y, m) if m == 1 else None)
             paths["dir"].mkdir(parents=True, exist_ok=True)

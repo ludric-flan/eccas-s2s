@@ -26,8 +26,19 @@ precip:
     season: [50, 100, 200, 300, 400, 500, 600]
   # Seuil d'anomalie (mm) pour le produit « anomalie seuil ».
   anomaly_mm: {decade: 15, month: 30, season: 60}
-  # Masque sec : climatologie de la période inférieure à ce cumul (mm).
-  dry_mask_mm: 1.0
+  # Masque de saison sèche appliqué aux produits (décision du 19/09/2026).
+  # Une maille est masquée (« sèche ») quand la pluie PRÉVUE de la période est :
+  #   - method: relative -> inférieure à relative_fraction × moyenne climatologique
+  #                         de la maille pour la période ;
+  #   - method: absolute -> inférieure à absolute_mm[échelle].
+  # Pluie prévue : moyenne d'ensemble (produits bruts) ou médiane de la
+  # distribution calibrée (produits calibrés). Moyenne climatologique : celle du
+  # hindcast du modèle pour les produits bruts, la normale observée 1991–2020
+  # pour les produits calibrés. La méthode peut être changée à l'exécution.
+  dry_mask:
+    method: relative
+    relative_fraction: 0.15
+    absolute_mm: {decade: 5, month: 15, season: 45}
   wet_day_mm: 1.0              # définition d'un jour de pluie
 
 temperature:

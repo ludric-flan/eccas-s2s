@@ -114,3 +114,19 @@ def test_block_average_accepts_float32_coordinates():
                           longitude=da["longitude"].astype("float32") + np.float32(-6e-6))
     out = block_average(da, 1.0)
     np.testing.assert_allclose(out["latitude"].values, [-1.5, -0.5])
+
+
+def test_open_chirps_daily_multi_files(tmp_path):
+    from eccas_s2s.obs.chirps import open_chirps_daily
+    a = _daily(start="1990-12-25", end="1990-12-31").to_dataset()
+    b = _daily(start="1991-01-01", end="1991-01-05").to_dataset()
+    a.to_netcdf(tmp_path / "a_1990.nc"); b.to_netcdf(tmp_path / "b_1991.nc")
+    da = open_chirps_daily([tmp_path / "a_*.nc", tmp_path / "b_1991.nc"])
+    assert da.sizes["time"] == 12 and str(da.time.values[0])[:10] == "1990-12-25"
+    # a gap at the junction is refused
+    _daily(start="1991-01-03", end="1991-01-05").to_dataset().to_netcdf(tmp_path / "c.nc")
+    with pytest.raises(ValueError, match="manquant"):
+        open_chirps_daily([tmp_path / "a_1990.nc", tmp_path / "c.nc"])
+    # duplicated days are refused
+    with pytest.raises(ValueError, match="double"):
+        open_chirps_daily([tmp_path / "b_1991.nc", tmp_path / "c.nc"])

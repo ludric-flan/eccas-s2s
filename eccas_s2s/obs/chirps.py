@@ -28,15 +28,48 @@ SUSPICIOUS_DAILY_MM = 300.0
 _ENCODING = {"zlib": True, "complevel": 4, "dtype": "float32", "_FillValue": np.float32(-9999.0)}
 
 
-def open_chirps_daily(path: str | Path) -> xr.DataArray:
-    """Open the CHIRPS daily file lazily, as ``precip`` (mm/day), latitude ascending."""
-    ds = xr.open_dataset(path, chunks={"time": 31})
-    name = "precip" if "precip" in ds else list(ds.data_vars)[0]
-    rename = {k: v for k, v in (("lat", "latitude"), ("lon", "longitude")) if k in ds.coords}
-    da = ds[name].rename(rename) if rename else ds[name]
-    da = snap_coords(da.sortby("latitude"))
+def expand_paths(paths) -> list[Path]:
+    """Expand a path, a glob pattern or a list of them into sorted existing files."""
+    import glob
+    items = [paths] if isinstance(paths, (str, Path)) else list(paths)
+    files = []
+    for item in items:
+        hits = sorted(glob.glob(str(item)))
+        if not hits:
+            raise FileNotFoundError(f"aucun fichier CHIRPS pour {item}")
+        files += [Path(h) for h in hits]
+    return files
+
+
+def open_chirps_daily(paths) -> xr.DataArray:
+    """
+    Open one or several CHIRPS daily files lazily, as ``precip`` (mm/day).
+
+    ``paths`` may be a file, a glob pattern or a list of them (e.g. the 1981–1990
+    yearly files plus the 1991–2025 file). The files are concatenated in time;
+    duplicated or missing days raise an error. Latitude is sorted ascending and
+    coordinates are snapped to their nominal values.
+    """
+    files = expand_paths(paths)
+    parts = []
+    for f in files:
+        ds = xr.open_dataset(f, chunks={"time": 31})
+        name = "precip" if "precip" in ds else list(ds.data_vars)[0]
+        rename = {k: v for k, v in (("lat", "latitude"), ("lon", "longitude")) if k in ds.coords}
+        da = ds[name].rename(rename) if rename else ds[name]
+        parts.append(snap_coords(da.sortby("latitude")))
+    da = xr.concat(parts, dim="time", join="exact") if len(parts) > 1 else parts[0]
+    da = da.sortby("time")
+    t = pd.DatetimeIndex(da["time"].values)
+    if t.has_duplicates:
+        raise ValueError(f"jours en double dans CHIRPS : {t[t.duplicated()][:3].tolist()}")
+    expected = pd.date_range(t[0], t[-1], freq="D")
+    if len(expected) != len(t):
+        missing = expected.difference(t)
+        raise ValueError(f"{len(missing)} jour(s) manquant(s) dans CHIRPS, ex. {missing[:3].tolist()}")
     da.name = "precip"
     da.attrs.setdefault("units", "mm/day")
+    da.attrs["source_files"] = ";".join(str(f.resolve()) for f in files)
     return da
 
 

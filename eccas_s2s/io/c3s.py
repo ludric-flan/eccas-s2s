@@ -33,7 +33,13 @@ C3S_CENTRE_SYSTEMS = {
 C3S_VARIABLES = {
     "PRCP": "total_precipitation",
     "TEMP": "2m_temperature",
+    "TMAX": "maximum_2m_temperature_in_the_last_24_hours",
+    "TMIN": "minimum_2m_temperature_in_the_last_24_hours",
 }
+
+#: dataset of monthly statistics (used for the 2 m mean temperature, months/seasons only).
+C3S_MONTHLY_DATASET = "seasonal-monthly-single-levels"
+DEFAULT_LEADTIME_MONTHS = [str(m) for m in range(1, 7)]
 
 #: daily lead-time steps in hours (24h .. 216 days), as the current pipeline uses.
 DEFAULT_LEADTIME_HOURS = [str(h) for h in range(24, 5184, 24)]
@@ -73,9 +79,37 @@ def build_c3s_request(centre, variable, years, init_month, area,
     return "seasonal-original-single-levels", request
 
 
+def build_c3s_monthly_request(centre, variable, years, init_month, area, system=None,
+                              leadtime_months=None, product_type="monthly_mean"):
+    """
+    ``(dataset, request)`` for the C3S monthly statistics (pure, no network).
+
+    ``leadtime_month`` 1 is the initialisation month itself (e.g. September for a
+    1 September start).
+    """
+    if variable not in C3S_VARIABLES:
+        raise KeyError(f"variable must be one of {list(C3S_VARIABLES)}")
+    if system is None:
+        system = C3S_CENTRE_SYSTEMS.get(centre)
+        if system is None:
+            raise KeyError(f"unknown centre '{centre}'; pass system= explicitly")
+    request = {
+        "originating_centre": centre,
+        "system": str(system),
+        "variable": [C3S_VARIABLES[variable]],
+        "product_type": [product_type],
+        "year": [str(y) for y in years],
+        "month": [f"{int(init_month):02d}"],
+        "leadtime_month": list(leadtime_months) if leadtime_months else DEFAULT_LEADTIME_MONTHS,
+        "data_format": "grib",
+        "area": _area_to_cds(area),
+    }
+    return C3S_MONTHLY_DATASET, request
+
+
 def download_c3s(centre, variable, years, init_month, area, dir_to_save,
                  system=None, init_day="01", leadtime_hours=None,
-                 force_download=False, kind="forecast"):
+                 force_download=False, kind="forecast", monthly=False):
     """
     Download a C3S seasonal subset to a GRIB file and return its path.
 
@@ -83,16 +117,21 @@ def download_c3s(centre, variable, years, init_month, area, dir_to_save,
     """
     import cdsapi  # imported lazily so the package imports without CDS installed
 
-    dataset, request = build_c3s_request(
-        centre, variable, years, init_month, area,
-        system=system, init_day=init_day, leadtime_hours=leadtime_hours,
-    )
+    if monthly:
+        dataset, request = build_c3s_monthly_request(centre, variable, years, init_month, area,
+                                                     system=system)
+    else:
+        dataset, request = build_c3s_request(
+            centre, variable, years, init_month, area,
+            system=system, init_day=init_day, leadtime_hours=leadtime_hours,
+        )
     syst = request["system"]
     if kind == "hindcast":
         tag = f"{years[0]}_{years[-1]}"
     else:
         tag = str(years[0])
-    fname = f"c3s_{centre}_{syst}_{variable}_{kind}_{tag}_{int(init_month):02d}.grib"
+    suffix = "_monthly" if monthly else ""
+    fname = f"c3s_{centre}_{syst}_{variable}_{kind}_{tag}_{int(init_month):02d}{suffix}.grib"
     dest = os.path.join(dir_to_save, fname)
 
     if os.path.isfile(dest) and os.path.getsize(dest) > 0 and not force_download:

@@ -48,7 +48,11 @@ observations:
     source: CHIRPS
     version: "2.0"
     resolution_deg: 0.05
-    daily_path: /home/ludric/Desktop/Donnees_calibration_c3s/DATA/CHIRPS/TP_CHIRPS_v2.0_DAILY_1991_2025_p05_ECCAS.nc
+    # Fichiers quotidiens (chemins ou motifs) : 1981–1990 téléchargés par
+    # run_download_chirps.py, 1991–2025 fichier CEEAC existant.
+    daily_paths:
+      - /home/ludric/Downloads/SVM/Previsions_S2S/DATA_OSF/raw/chirps/daily_p05/chirps-v2.0.19[8]*.days_p05_ECCAS.nc
+      - /home/ludric/Desktop/Donnees_calibration_c3s/DATA/CHIRPS/TP_CHIRPS_v2.0_DAILY_1991_2025_p05_ECCAS.nc
   temperature:
     source: ERA5-Land
     resolution_deg: 0.1
@@ -72,7 +76,18 @@ systems:
       eccc:         {system: "5",   label: "ECCC GEM5.2-NEMO",   max_lead_days: 214}
       bom:          {system: "2",   label: "BoM ACCESS-S2",      max_lead_days: 215}
   nmme:
-    enabled: true             # mensuel uniquement (mois, saisons) — phase P1
-    hindcast: full            # toute la période disponible par modèle (D4)
-    models: [cola_rsmas_ccsm4, cola_rsmas_cesm1, nasa_geoss2s, gfdl_spear,
-             cansips_ic4, ncar_cesm1, ncep_cfsv2]
+    enabled: true
+    # Source : serveur NOAA/CPC (fichiers servis à CPT), un dossier par mois
+    # d'initialisation, une moyenne d'ensemble (ENSMEAN) par modèle, variable et
+    # année. Les membres individuels ne sont pas fournis. Mensuel uniquement :
+    # mois et saisons (décision D4 : toute la période de hindcast disponible).
+    source: cpc
+    base_url: https://ftp.cpc.ncep.noaa.gov/International/nmme/netcdf
+    variables: [prate, tmp2m, tmpsfc]   # pluie (mm/s), T2m (K), SST (K, prédicteur)
+    models:
+      CFSv2:        {label: "NCEP CFSv2"}
+      NASA_GEOS5v2: {label: "NASA GEOS-S2S v2"}
+      NCAR_CCSM4:   {label: "COLA-RSMAS CCSM4"}
+      CanESM5:      {label: "ECCC CanESM5"}
+      GEM5.2_NEMO:  {label: "ECCC GEM5.2-NEMO"}
+      NCAR_CESM1:   {label: "NCAR CESM1"}
