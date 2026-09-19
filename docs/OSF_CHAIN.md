@@ -21,6 +21,8 @@ pytest -q                 # tous les tests doivent passer
 |---|---|---|
 | E2 · téléchargement C3S | `python scripts/run_download_c3s.py --config config/cycle_202609.yaml --variable precip` | P0 |
 | E2 · contrôle qualité C3S | `python scripts/run_qc_c3s.py --config config/cycle_202609.yaml --variable precip` | P0 |
+| E1 · référence CHIRPS (archive + normales, seulement si CHIRPS a changé) | `python scripts/run_obs_chirps.py --config config/cycle_202609.yaml` | P1 |
+| E2 · cumuls C3S par période | `python scripts/run_c3s_totals.py --config config/cycle_202609.yaml` | P1 |
 | … | (ajoutés au fil des phases) | |
 
 Chaque étape existe aussi en notebook opérationnel (voir plus bas). Scripts et notebooks appellent la même fonction `run(...)` de `eccas_s2s/operations/`.
@@ -32,6 +34,8 @@ Tester une requête sans télécharger : ajouter `--dry-run`.
 | Contenu | Emplacement (défini dans le YAML) |
 |---|---|
 | Données brutes immuables | `DATA_OSF/raw/<système>/<YYYYMM>/` |
+| Référence CHIRPS dérivée (partagée par tous les cycles) | `DATA_OSF/derived/obs/chirps/` |
+| Cumuls C3S par période | `DATA_OSF/derived/c3s/<YYYYMM>/` |
 | Journaux et manifestes d'exécution | `OUTPUTS_OSF/runs/<run_id>/{run.log, manifest.json}` |
 | Prévisions émises (archive) | `ARCHIVE_OSF/<YYYY>/<MM>/<run_id>/` |
 
@@ -46,7 +50,11 @@ Tester une requête sans télécharger : ajouter `--dry-run`.
 | `eccas_s2s.io.c3s_read` | lecture GRIB → structure `(year, number, lead_day, latitude, longitude)` |
 | `eccas_s2s.agro.calendars` | paramètres Liebmann (v10) et faisabilité par initialisation |
 | `eccas_s2s.io.c3s_qc` | contrôle qualité des fichiers bruts : membres, années, horizon reçu, échéances manquantes |
-| `eccas_s2s.operations.*` | étapes opérationnelles (`run(...)` + `main(argv)`) : `download_c3s`, `qc_c3s` |
+| `eccas_s2s.obs.chirps` | lecture CHIRPS, contrôle qualité et cumuls décadaires/mensuels en une passe mois par mois |
+| `eccas_s2s.obs.climatology` | cumuls observés des périodes d'un cycle, normales 1991–2020 par maille et par période calendaire |
+| `eccas_s2s.obs.regrid` | moyenne par blocs exacte 0,05° → 1° (emboîtement vérifié), sélection des mailles modèle |
+| `eccas_s2s.viz.maps` | panneaux de cartes CEEAC |
+| `eccas_s2s.operations.*` | étapes opérationnelles (`run(...)` + `main(argv)`) : `download_c3s`, `qc_c3s`, `obs_chirps`, `c3s_totals` |
 
 Les modules historiques (`eccas_s2s.config`, `core.processing`, `pipeline`) sont conservés tels quels.
 
@@ -58,6 +66,8 @@ Les modules historiques (`eccas_s2s.config`, `core.processing`, `pipeline`) sont
 - **Production :** lancer la chaîne depuis un code commité (`dirty: false` dans le manifeste).
 
 - **Ensembles UKMO et BoM :** fichiers bruts conservés tels que téléchargés, traités avec les membres disponibles au 1er du mois (2–11 membres) ; le contrôle qualité le signale.
+- **Normales observées :** 1991–2020, par maille et par période calendaire (`dekad_MM_D`, `month_MM`, `season_MM`), percentiles estimés par la position de Weibull ; communes à tous les modèles (D12).
+- **Grilles :** CHIRPS 0,05° et C3S 1° sont emboîtées (20 × 20) : passage à 1° par moyenne par blocs exacte. Coordonnées CHIRPS recalées (stockées en simple précision).
 - **Horizon :** `max_lead_days` = horizon **reçu** (DWD 181 j, Météo-France 212 j pour l'init. 09) ; le contrôle qualité signale tout écart avec la configuration.
 
 ## Notebooks
@@ -70,7 +80,11 @@ Deux familles :
 | Notebook | Type | Contenu |
 |---|---|---|
 | `pedagogiques/00_P0_fondations.ipynb` | pédagogique | configuration, provenance, périodes, dates des cumuls, faisabilité agro |
+| `pedagogiques/01_observations_chirps.ipynb` | pédagogique | QC CHIRPS, cumuls calendaires, normales et percentiles par maille, passage à 1°, sensibilité à la période de référence |
+| `pedagogiques/02_cumuls_c3s.ipynb` | pédagogique | cumuls C3S par période, biais de moyenne et de variabilité des modèles bruts |
 | `operationnels/OP_01_telechargement_qc_c3s.ipynb` | opérationnel | téléchargement C3S + contrôle qualité + horizon commun |
+| `operationnels/OP_02_reference_chirps.ipynb` | opérationnel | archive CHIRPS + normales (idempotent) |
+| `operationnels/OP_03_cumuls_c3s.ipynb` | opérationnel | cumuls C3S par période |
 
 ## Git
 

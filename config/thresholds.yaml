@@ -7,10 +7,14 @@
 # =============================================================================
 
 # Percentiles calculés à chaque maille, pour chaque échelle et chaque période.
-percentiles: [5, 10, 20, 33.33, 50, 66.67, 80, 90, 95]
+percentiles: [5, 10, 20, 33.333333, 50, 66.666667, 80, 90, 95]
+# Estimateur des percentiles sur 30 ans : position de Weibull i/(n+1)
+# (numpy method="weibull"), sans biais pour les petits échantillons.
+percentile_method: weibull
+min_years_normal: 25        # années valides minimales pour calculer une normale
 
 categories:
-  terciles: [33.33, 66.67]     # BN | NN | AN
+  terciles: [33.333333, 66.666667]  # BN | NN | AN
   quintiles_outer: [20, 80]    # P20 (très sec / très frais), P80 (très humide / très chaud)
   median: 50
 

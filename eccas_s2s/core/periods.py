@@ -79,6 +79,18 @@ class Period:
         return f"{self.scale}_m{self.month_offset}"
 
     @property
+    def calendar_key(self) -> str:
+        """
+        Cycle-independent calendar identifier, used to share observed normals
+        across cycles: ``dekad_MM_D``, ``month_MM`` or ``season_MM`` (MM = first
+        calendar month of the period).
+        """
+        mm = self.months[0]
+        if self.scale == "decade":
+            return f"dekad_{mm:02d}_{self.decade}"
+        return f"{self.scale}_{mm:02d}"
+
+    @property
     def months(self) -> list[int]:
         return [_shift_month(2000, self.init_month, self.month_offset + k)[1]
                 for k in range(self.n_months)]

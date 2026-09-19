@@ -55,3 +55,26 @@ def test_download_dry_run_records_requests(tmp_cycle_file):
 def test_download_rejects_unknown_model(tmp_cycle_file):
     with pytest.raises(ValueError, match="absents"):
         download_c3s.run(str(tmp_cycle_file), "precip", models=["xyz"], dry_run=True)
+
+
+SEPT_ECMWF = Path("/home/ludric/Downloads/SVM/Previsions_S2S/DATA_OSF/raw/c3s/202609/"
+                  "c3s_ecmwf_51_PRCP_forecast_2026_09.grib")
+
+
+@pytest.mark.skipif(not SEPT_ECMWF.exists(), reason="fichier C3S de septembre absent")
+def test_osf_totals_equal_v2_code_on_shifted_windows():
+    """The v2 decumulation + accumulation, run on windows shifted by +1 day, gives the OSF totals exactly."""
+    from eccas_s2s.core import processing as v2
+    from eccas_s2s.core.daily import aggregate_periods
+    from eccas_s2s.core.periods import build_periods
+    from eccas_s2s.io.c3s_read import load_c3s_precip_daily, open_c3s_grib
+
+    raw = open_c3s_grib(SEPT_ECMWF).isel(number=slice(0, 4))
+    periods = build_periods(pd.Timestamp("2026-09-01"), 215)
+    daily = load_c3s_precip_daily(SEPT_ECMWF).isel(number=slice(0, 4))
+    osf = aggregate_periods(daily, periods, how="sum").isel(year=0).transpose("number", "period", ...)
+    pdf = pd.DataFrame([v2._make_period_row(p.scale, p.key, p.dates(2026)[0] + pd.Timedelta(days=1),
+                                            p.dates(2026)[1] + pd.Timedelta(days=1)) for p in periods])
+    acc = v2.accumulate_forecast_over_periods(v2.decumulate_precip_to_mm(raw), pdf)
+    acc = acc.transpose("number", "period", "latitude", "longitude")
+    assert float(abs(acc.values - osf.values).max()) == 0.0
