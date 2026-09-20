@@ -84,9 +84,12 @@ def run(config: str, variable: str = "precip", kinds=("forecast", "hindcast"),
         for centre in selected:
             m = all_models[centre]
             monthly = variable in MONTHLY_VARIABLES
-            leadtime_hours = [str(h) for h in range(24, 24 * m.max_lead_days + 1, 24)]
             for kind in kinds:
                 years = [str(init.year)] if kind == "forecast" else [str(y) for y in cfg.c3s_hindcast_years]
+                # hindcasts: one extra lead day so that leap years (29 February)
+                # still cover the last complete period of the horizon
+                n_days = m.max_lead_days + (1 if kind == "hindcast" else 0)
+                leadtime_hours = [str(h) for h in range(24, 24 * n_days + 1, 24)]
                 what = f"{centre} sys {m.system} {kind}"
                 if monthly:
                     dataset, request = build_c3s_monthly_request(centre, var_key, years, init.month,
@@ -96,7 +99,7 @@ def run(config: str, variable: str = "precip", kinds=("forecast", "hindcast"),
                     dataset, request = build_c3s_request(
                         centre, var_key, years, init.month, area,
                         system=m.system, leadtime_hours=leadtime_hours)
-                    shown = {**request, "leadtime_hour": f"24..{24 * m.max_lead_days} (pas 24 h)"}
+                    shown = {**request, "leadtime_hour": f"24..{24 * n_days} (pas 24 h)"}
                 ctx.record_parameter(f"request.{centre}.{kind}", {"dataset": dataset, **shown})
                 if dry_run:
                     ctx.log.info("[dry-run] %s : %s", what, json.dumps(
