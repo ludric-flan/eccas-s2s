@@ -48,7 +48,7 @@ def test_download_dry_run_records_requests(tmp_cycle_file):
     assert m["status"] == "success" and m["outputs"] == []
     req = m["parameters"]["request.dwd.hindcast"]
     assert req["system"] == "22" and len(req["year"]) == 24
-    assert req["leadtime_hour"] == "24..4344 (pas 24 h)"     # 181 days
+    assert req["leadtime_hour"] == "24..4368 (pas 24 h)"     # 181 days + 1 (leap years)
     assert req["area"] == [30.0, -10.0, -25.0, 40.0]
 
 
