@@ -107,3 +107,11 @@ def test_era5_hourly_to_daily():
     assert len(req["time"]) == 24 and req["data_format"] == "grib" and req["area"] == [25, 5, -20, 35]
     assert months_for_year(2026, today="2026-09-19") == list(range(1, 9))
     assert months_for_year(2027, today="2026-09-19") == []
+
+
+def test_hindcast_requests_ask_one_extra_lead_day(tmp_cycle_file):
+    """Leap hindcast years (29 February) need one lead day more than the nominal horizon."""
+    ctx = download_c3s.run(str(tmp_cycle_file), "tmax", models=["dwd"], dry_run=True)
+    m = json.loads((ctx.run_dir / "manifest.json").read_text())["parameters"]
+    assert m["request.dwd.forecast"]["leadtime_hour"] == "24..4344 (pas 24 h)"      # 181 days
+    assert m["request.dwd.hindcast"]["leadtime_hour"] == "24..4368 (pas 24 h)"      # 182 days
