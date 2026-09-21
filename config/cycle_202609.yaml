@@ -27,6 +27,7 @@ paths:
   # Archive des prévisions émises (prérequis de la vérification temps réel).
   archive_root: /home/ludric/Downloads/SVM/Previsions_S2S/ARCHIVE_OSF
   shapefile: /home/ludric/Desktop/Donnees_calibration_c3s/pays_cceac_shapefile/ceeac_pays_adm1.shp
+  logo: /home/ludric/Desktop/Donnees_calibration_c3s/pays_cceac_shapefile/logo_creuw_eccas_undrr.png
 
 # Échelles temporelles des produits (décision D8).
 scales: [decade, month, season]

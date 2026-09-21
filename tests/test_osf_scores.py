@@ -184,7 +184,9 @@ def test_pairs_without_members_flagged():
     fc, ob = _ensemble()
     ds = build_pairs(fc.mean("number"), ob)
     assert ds.attrs["has_members"] == 0 and ds.attrs["n_members"] == 0
-    assert set(np.unique(ds.prob.values)) <= {0.0, 1.0}      # deterministic categories only
+    # ensemble mean only (NMME): no probability at all, a deterministic category
+    assert "prob" not in ds
+    assert set(np.unique(ds.fcst_cat.values)) <= {0.0, 1.0, 2.0}
 
 
 # ------------------------------------------------------------- R bridge
@@ -256,3 +258,109 @@ def test_fraction_positive_ignores_nan():
     score = xr.full_like(ref, np.nan)
     score[0, :] = 1.0
     assert fraction_positive(score, mask) == pytest.approx(1.0)
+
+
+# ------------------------------------------------- pooled pairs and diagrams
+def _grid_ensemble(n_years=24, n_members=8, ny=6, nx=7, seed=7):
+    """A small hindcast on a grid, with a shared signal so the skill is not zero."""
+    rng = np.random.default_rng(seed)
+    years = np.arange(1993, 1993 + n_years)
+    lat = np.arange(-2.5, -2.5 + ny, 1.0)
+    lon = np.arange(10.5, 10.5 + nx, 1.0)
+    signal = rng.normal(size=(n_years, 1, ny, nx))
+    members = signal + rng.normal(scale=0.9, size=(n_years, n_members, ny, nx))
+    obs = signal[:, 0] + rng.normal(scale=0.9, size=(n_years, ny, nx))
+    fc = xr.DataArray(members, dims=("year", "number", "latitude", "longitude"),
+                      coords={"year": years, "number": np.arange(n_members),
+                              "latitude": lat, "longitude": lon})
+    ob = xr.DataArray(obs, dims=("year", "latitude", "longitude"),
+                      coords={"year": years, "latitude": lat, "longitude": lon})
+    return (fc.expand_dims(period=["SON"]).transpose("year", "number", "period",
+                                                     "latitude", "longitude"),
+            ob.expand_dims(period=["SON"]).transpose("year", "period", "latitude", "longitude"))
+
+
+def _mask_of(ob):
+    return xr.DataArray(np.ones((ob.sizes["latitude"], ob.sizes["longitude"]), bool),
+                        dims=("latitude", "longitude"),
+                        coords={"latitude": ob["latitude"], "longitude": ob["longitude"]})
+
+
+def test_pooled_frame_pools_years_and_gridpoints():
+    from eccas_s2s.validate.pairs import build_pairs
+    from eccas_s2s.validate.pooled import pooled_frame
+    fc, ob = _grid_ensemble()
+    ds = build_pairs(fc, ob)
+    frame = pooled_frame(ds, _mask_of(ob))
+    assert len(frame) == 24 * 6 * 7                      # every year x every cell
+    assert {"pBN", "pNN", "pAN", "obs_cat", "year"} <= set(frame.columns)
+    assert frame[["pBN", "pNN", "pAN"]].sum(axis=1).round(6).eq(1.0).all()
+    # the pooled sample is what makes ten probability bins usable
+    assert frame["pAN"].round(3).nunique() > 5
+
+
+def test_pooled_frame_thins_large_zones():
+    from eccas_s2s.validate.pairs import build_pairs
+    from eccas_s2s.validate.pooled import pooled_frame
+    fc, ob = _grid_ensemble()
+    ds = build_pairs(fc, ob)
+    frame = pooled_frame(ds, _mask_of(ob), max_pixels=10)
+    assert frame["cell"].nunique() <= 10 and len(frame) == 24 * frame["cell"].nunique()
+
+
+def test_pooled_frame_without_members_has_no_probability():
+    from eccas_s2s.validate.pairs import build_pairs
+    from eccas_s2s.validate.pooled import pooled_frame
+    fc, ob = _grid_ensemble()
+    ds = build_pairs(fc.mean("number"), ob)
+    frame = pooled_frame(ds, _mask_of(ob))
+    assert "pBN" not in frame.columns and "fcst_cat" in frame.columns
+
+
+@pytest.mark.skipif(RSCRIPT is None, reason="Rscript absent")
+def test_zone_diagrams_draw_two_figures(tmp_path):
+    """One reliability figure and one ROC figure per period, three categories each."""
+    from eccas_s2s.validate.pairs import build_pairs
+    from eccas_s2s.validate.pooled import pooled_frame
+    from eccas_s2s.validate.r_bridge import run_zone_diagrams
+    from eccas_s2s.validate.scores import roc_area
+
+    fc, ob = _grid_ensemble()
+    ds = build_pairs(fc, ob)
+    frame = pooled_frame(ds, _mask_of(ob))
+    figures = run_zone_diagrams(frame, tmp_path, "test|precip|domain", n_boot=30)
+    assert [f.name for f in figures] == ["reliability_SON.png", "roc_SON.png"]
+    scores = pd.read_csv(tmp_path / "diagram_scores.csv")
+    assert list(scores["category"]) == ["BN", "NN", "AN"]
+    # the R area of the pooled sample is the pooled version of the Python map
+    py = float(roc_area(ds["prob"].sel(category="AN"),
+                        (ds["obs_cat"] == 2).astype(float)).mean())
+    assert abs(float(scores.set_index("category").loc["AN", "roc_area"]) - py) < 0.1
+
+
+@pytest.mark.skipif(RSCRIPT is None, reason="Rscript absent")
+def test_zone_diagrams_skip_systems_without_members(tmp_path):
+    from eccas_s2s.validate.pairs import build_pairs
+    from eccas_s2s.validate.pooled import pooled_frame
+    from eccas_s2s.validate.r_bridge import run_zone_diagrams
+    fc, ob = _grid_ensemble()
+    frame = pooled_frame(build_pairs(fc.mean("number"), ob), _mask_of(ob))
+    assert run_zone_diagrams(frame, tmp_path, "nmme|precip|domain", n_boot=30) == []
+
+
+def test_summary_rows_without_probabilities():
+    """A member-less system is judged on the deterministic criterion alone."""
+    from eccas_s2s.operations.skill_raw import summary_rows
+    from eccas_s2s.validate.pairs import build_pairs
+    from eccas_s2s.validate.scores import deterministic_scores
+
+    fc, ob = _grid_ensemble()
+    pairs = build_pairs(fc.mean("number"), ob)
+    maps = deterministic_scores(pairs["ensmean"], pairs["obs"]).assign_coords(
+        label=("period", ["SON 2026"]), scale=("period", ["season"]))
+    maps.attrs.update(n_years=24, n_members=0)
+    rows = summary_rows(maps, {"domain": _mask_of(ob)}, "nmme", "CFSv2", "precip",
+                        {"SON": 0})
+    assert len(rows) == 1 and rows[0]["probabilistic"] is False
+    assert "rpss_domain_median" not in rows[0] and "frac_rpss_positive" not in rows[0]
+    assert rows[0]["eligible"] == (rows[0]["frac_pearson_positive"] >= 0.05)

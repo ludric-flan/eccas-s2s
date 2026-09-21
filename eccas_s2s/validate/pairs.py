@@ -74,6 +74,17 @@ def tercile_probabilities(ensemble: xr.DataArray, year_dim: str = "year",
     return prob
 
 
+def _deterministic_category(ensmean: xr.DataArray, year_dim: str = "year") -> xr.DataArray:
+    """Tercile category of the ensemble mean itself (systems without members)."""
+    q = loyo_quantile(ensmean, TERCILES, year_dim=year_dim)
+    cat = xr.where(ensmean < q.sel(quantile=TERCILES[0], drop=True), 0,
+                   xr.where(ensmean >= q.sel(quantile=TERCILES[1], drop=True), 2, 1))
+    cat = cat.where(ensmean.notnull())
+    cat.attrs = {"long_name": "forecast tercile category of the ensemble mean",
+                 "note": "system without members: categorical, not probabilistic"}
+    return cat
+
+
 def build_pairs(hindcast: xr.DataArray, obs: xr.DataArray, year_dim: str = "year",
                 member_dim: str = "number") -> xr.Dataset:
     """
@@ -93,23 +104,20 @@ def build_pairs(hindcast: xr.DataArray, obs: xr.DataArray, year_dim: str = "year
     ensmean = fc.mean(member_dim) if has_members else fc
     ens_sd = fc.std(member_dim, ddof=1) if has_members else xr.full_like(ensmean, np.nan)
     obs_cat, obs_q = observed_categories(ob, year_dim)
+    data = {"ensmean": ensmean, "ens_sd": ens_sd, "obs": ob, "obs_cat": obs_cat,
+            "obs_q33": obs_q.sel(quantile=TERCILES[0], drop=True),
+            "obs_q67": obs_q.sel(quantile=TERCILES[1], drop=True)}
     if has_members:
-        prob = tercile_probabilities(fc, year_dim, member_dim)
+        data["prob"] = tercile_probabilities(fc, year_dim, member_dim)
     else:
-        # no members: a "probability" can only be the deterministic category of
-        # the ensemble mean, kept for completeness and flagged in the attributes
-        q = loyo_quantile(ensmean, TERCILES, year_dim=year_dim)
-        cat = xr.where(ensmean < q.sel(quantile=TERCILES[0], drop=True), 0,
-                       xr.where(ensmean >= q.sel(quantile=TERCILES[1], drop=True), 2, 1))
-        prob = xr.concat([(cat == k).astype(float) for k in range(3)],
-                         dim=xr.DataArray(list(CATEGORIES), dims="category", name="category"))
-        prob.attrs = {"long_name": "deterministic category of the ensemble mean (0/1)",
-                      "note": "system without members: no probabilistic information"}
+        # A system delivered as an ensemble mean (NMME on the NOAA/CPC server)
+        # carries no probabilistic information: counting "members" would give
+        # 0/1 pseudo-probabilities and a meaningless RPSS or ROC. Only the
+        # deterministic scores are produced; the probabilities of such a system
+        # can only come from a calibration (phase P3).
+        data["fcst_cat"] = _deterministic_category(ensmean, year_dim)
 
-    ds = xr.Dataset({"ensmean": ensmean, "ens_sd": ens_sd, "obs": ob,
-                     "obs_cat": obs_cat, "prob": prob,
-                     "obs_q33": obs_q.sel(quantile=TERCILES[0], drop=True),
-                     "obs_q67": obs_q.sel(quantile=TERCILES[1], drop=True)})
+    ds = xr.Dataset(data)
     ds.attrs = {"n_years": int(len(years)), "years": f"{years[0]}-{years[-1]}",
                 "has_members": int(has_members),
                 "n_members": int(fc.sizes[member_dim]) if has_members else 0}
@@ -131,8 +139,11 @@ def zone_index(ds: xr.Dataset, mask: xr.DataArray, lat_dim: str = "latitude") ->
     weights = np.cos(np.deg2rad(ds[lat_dim])).where(mask)
     out = {}
     for v in ("ensmean", "ens_sd", "obs", "prob"):
-        out[v] = ds[v].weighted(weights.fillna(0)).mean([d for d in mask.dims])
+        if v in ds:
+            out[v] = ds[v].weighted(weights.fillna(0)).mean([d for d in mask.dims])
     idx = xr.Dataset(out)
     idx["obs_cat"], _ = observed_categories(idx["obs"])
+    if "prob" not in idx:       # ensemble-mean system: categorical forecast of the index
+        idx["fcst_cat"] = _deterministic_category(idx["ensmean"])
     idx.attrs = {**ds.attrs, "zone_cells": int(mask.sum())}
     return idx

@@ -25,6 +25,7 @@ import pandas as pd
 import xarray as xr
 
 R_SCRIPT = Path(__file__).with_name("zone_scores.R")
+R_DIAGRAMS = Path(__file__).with_name("zone_diagrams.R")
 REQUIRED_PACKAGES = ("verification",)
 OUTPUT_FILES = ("deterministic_scores.csv", "tercile_scores.csv",
                 "category_scores.csv", "reliability_bins.csv")
@@ -74,18 +75,42 @@ def pairs_to_frame(index: xr.Dataset) -> pd.DataFrame:
     rows = []
     for p in periods:
         sel = index.sel(period=p) if "period" in index.dims else index
-        rows.append(pd.DataFrame({
-            "period": p,
-            "year": sel["year"].values,
-            "ensmean": sel["ensmean"].values,
-            "ens_sd": sel["ens_sd"].values,
-            "obs": sel["obs"].values,
-            "pBN": sel["prob"].sel(category="BN").values,
-            "pNN": sel["prob"].sel(category="NN").values,
-            "pAN": sel["prob"].sel(category="AN").values,
-            "obs_cat": sel["obs_cat"].values,
-        }))
+        row = {"period": p, "year": sel["year"].values, "ensmean": sel["ensmean"].values,
+               "ens_sd": sel["ens_sd"].values, "obs": sel["obs"].values,
+               "obs_cat": sel["obs_cat"].values}
+        if "prob" in sel:        # a system without members has no probabilities
+            row["pBN"] = sel["prob"].sel(category="BN").values
+            row["pNN"] = sel["prob"].sel(category="NN").values
+            row["pAN"] = sel["prob"].sel(category="AN").values
+        elif "fcst_cat" in sel:  # ensemble mean only: a categorical forecast instead
+            row["fcst_cat"] = sel["fcst_cat"].values
+        rows.append(pd.DataFrame(row))
     return pd.concat(rows, ignore_index=True)
+
+
+def run_zone_diagrams(frame: pd.DataFrame, out_dir: str | Path, label: str,
+                      n_boot: int = 200, rscript: str | None = None) -> list[Path]:
+    """
+    Draw the reliability and ROC diagrams of a zone with R.
+
+    Two figures per period: the attributes/reliability diagram and the ROC
+    diagram, each carrying the three tercile categories on the same axes.
+
+    ``frame`` holds the **pooled grid-point pairs** of the zone
+    (:func:`eccas_s2s.validate.pooled.pooled_frame`); a frame without
+    probabilities (ensemble-mean system) produces no figure, which the script
+    reports without failing. Returns the figures written.
+    """
+    path = find_rscript(rscript)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pooled_csv = out_dir / "pooled_pairs.csv"
+    frame.to_csv(pooled_csv, index=False)
+    res = subprocess.run([path, str(R_DIAGRAMS), str(pooled_csv), str(out_dir), label,
+                          str(int(n_boot))], capture_output=True, text=True, timeout=7200)
+    if res.returncode != 0:
+        raise RNotAvailable(f"zone_diagrams.R a échoué ({label}) :\n{res.stderr[-800:]}")
+    return sorted(list(out_dir.glob("reliability_*.png")) + list(out_dir.glob("roc_*.png")))
 
 
 def run_zone_scores(frame: pd.DataFrame, out_dir: str | Path, label: str,
