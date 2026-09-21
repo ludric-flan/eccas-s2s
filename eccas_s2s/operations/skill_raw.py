@@ -68,6 +68,19 @@ DETERMINISTIC_CRITERION = "pearson"
 PROBABILISTIC_CRITERION = "rpss"
 
 
+def split_skill_name(name: str) -> tuple[str, str, str]:
+    """
+    ``<system>_<model>_<variable>`` from a file or directory name.
+
+    Naive splitting breaks on the model names that hold an underscore
+    (``meteo_france``, ``NASA_GEOS5v2``, ``GEM5.2_NEMO``): the system is taken
+    from the left, the variable from the right, the rest is the model.
+    """
+    system, rest = name.replace("_skill", "").split("_", 1)
+    model, variable = rest.rsplit("_", 1)
+    return system, model, variable
+
+
 def skill_dir(cfg) -> Path:
     return cfg.output_root / "skill" / cfg.cycle_id / "raw"
 
@@ -241,10 +254,7 @@ def rebuild_summary(config: str, min_fraction: float = MIN_FRACTION) -> RunConte
     with RunContext(cfg, step="skill_raw_summary") as ctx:
         rows = []
         for f in sorted((out / "maps").glob("*_skill.nc")):
-            # <system>_<model>_<variable>, the model name itself holding underscores
-            # (meteo_france, NASA_GEOS5v2): split at both ends.
-            system, rest = f.stem.replace("_skill", "").split("_", 1)
-            model, variable = rest.rsplit("_", 1)
+            system, model, variable = split_skill_name(f.stem)
             with xr.open_dataset(f) as maps:
                 maps = maps.load()
             ctx.record_input(f, role="skill_maps")
@@ -256,6 +266,39 @@ def rebuild_summary(config: str, min_fraction: float = MIN_FRACTION) -> RunConte
             ctx.log.info("%s %s %s : %d période(s)", system, model, variable,
                          maps.sizes["period"])
         ctx.record_parameter("eligibility", _write_summary(cfg, ctx, out, rows))
+    return ctx
+
+
+def rescore_zones(config: str) -> RunContext:
+    """
+    Recompute the zone scores in R from the ``pairs.csv`` already written.
+
+    The couples are the expensive part; they are archived next to the scores, so
+    a change in the R script (a corrected Brier decomposition, a new score) is
+    replayed in seconds instead of rereading every hindcast.
+    """
+    cfg = load_cycle(config)
+    out = skill_dir(cfg)
+    with RunContext(cfg, step="skill_raw_zones") as ctx:
+        ctx.record_parameter("r_version", check_packages()["r_version"])
+        for pairs_csv in sorted((out / "zones").glob("*/*/pairs.csv")):
+            zdir = pairs_csv.parent
+            zone = zdir.name
+            system, model, variable = split_skill_name(zdir.parent.name)
+            frame = pd.read_csv(pairs_csv)
+            ctx.record_input(pairs_csv, role="pairs")
+            try:
+                run_zone_scores(frame, zdir, f"{system}|{model}|{variable}|{zone}")
+            except RNotAvailable as exc:
+                ctx.warn(f"scores R {zdir} : {exc}")
+                continue
+            ctx.log.info("%s %s %s %s : %d périodes", system, model, variable, zone,
+                         frame["period"].nunique())
+            for name in ("deterministic_scores.csv", "tercile_scores.csv",
+                         "category_scores.csv", "reliability_bins.csv"):
+                if (zdir / name).exists():
+                    ctx.record_output(zdir / name, role="zone_scores", system=system,
+                                      model=model, variable=variable, zone=zone)
     return ctx
 
 
@@ -367,9 +410,14 @@ def main(argv=None):
     ap.add_argument("--skip-r", action="store_true", help="ne pas calculer les scores de zone en R")
     ap.add_argument("--from-maps", action="store_true",
                     help="reconstruire seulement le tableau de synthèse à partir des cartes déjà écrites")
+    ap.add_argument("--from-pairs", action="store_true",
+                    help="recalculer seulement les scores de zone en R depuis les pairs.csv archivés")
     args = ap.parse_args(argv)
     if args.from_maps:
         rebuild_summary(args.config, args.min_fraction)
+        return
+    if args.from_pairs:
+        rescore_zones(args.config)
         return
     run(args.config, args.systems, args.variables, args.models, args.scales,
         args.min_fraction, args.skip_r)

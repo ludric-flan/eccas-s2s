@@ -364,3 +364,38 @@ def test_summary_rows_without_probabilities():
     assert len(rows) == 1 and rows[0]["probabilistic"] is False
     assert "rpss_domain_median" not in rows[0] and "frac_rpss_positive" not in rows[0]
     assert rows[0]["eligible"] == (rows[0]["frac_pearson_positive"] >= 0.05)
+
+
+@pytest.mark.skipif(RSCRIPT is None, reason="Rscript absent")
+def test_brier_decomposition_is_not_degenerate(tmp_path):
+    """
+    The exact Brier score needs fine thresholds, its decomposition needs classes.
+
+    With one forecast per threshold, every class is a 0 or a 1: reliability
+    collapses onto the score and resolution onto the uncertainty, and the
+    decomposition says nothing. zone_scores.R therefore calls brier() twice.
+    """
+    from eccas_s2s.validate.pairs import build_pairs, zone_index
+    from eccas_s2s.validate.r_bridge import pairs_to_frame, run_zone_scores
+
+    fc, ob = _grid_ensemble()
+    idx = zone_index(build_pairs(fc, ob), _mask_of(ob))
+    tables = run_zone_scores(pairs_to_frame(idx), tmp_path, "test|precip|domain")
+    cat = tables["category_scores"].iloc[0]
+    assert cat["bs_uncertainty"] == pytest.approx(2 / 9, abs=0.02)      # base rate 1/3
+    assert cat["bs_reliability"] != pytest.approx(cat["bs"], abs=1e-6)
+    assert cat["bs_resolution"] != pytest.approx(cat["bs_uncertainty"], abs=1e-6)
+    # the decomposition closes on the binned score (Murphy)
+    assert (cat["bs_reliability"] - cat["bs_resolution"] + cat["bs_uncertainty"]
+            == pytest.approx(cat["bs_binned"], abs=1e-6))
+    # ... and the binned score stays close to the exact one
+    assert cat["bs_binned"] == pytest.approx(cat["bs"], abs=0.02)
+
+
+def test_split_skill_name_handles_underscored_models():
+    """Model names with an underscore must not be cut in two (bug found on meteo_france)."""
+    from eccas_s2s.operations.skill_raw import split_skill_name
+    assert split_skill_name("c3s_ecmwf_precip_skill") == ("c3s", "ecmwf", "precip")
+    assert split_skill_name("c3s_meteo_france_tmax") == ("c3s", "meteo_france", "tmax")
+    assert split_skill_name("nmme_NASA_GEOS5v2_t2m_skill") == ("nmme", "NASA_GEOS5v2", "t2m")
+    assert split_skill_name("nmme_GEM5.2_NEMO_precip") == ("nmme", "GEM5.2_NEMO", "precip")

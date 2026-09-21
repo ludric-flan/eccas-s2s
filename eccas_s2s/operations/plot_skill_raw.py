@@ -23,7 +23,7 @@ from pathlib import Path
 
 import xarray as xr
 
-from eccas_s2s.operations.skill_raw import skill_dir
+from eccas_s2s.operations.skill_raw import skill_dir, split_skill_name
 from eccas_s2s.provenance import RunContext
 from eccas_s2s.settings import load_cycle
 from eccas_s2s.viz.ceeac_maps import SKILL_STYLES, map_panel
@@ -61,7 +61,7 @@ def run(config: str, scores=DEFAULT_SCORES, scales=None, category: str = "AN",
         by_key: dict[tuple[str, str], list] = {}
 
         for f in files:
-            system, model, variable = f.stem.replace("_skill", "").split("_", 2)
+            system, model, variable = split_skill_name(f.stem)
             ds = xr.open_dataset(f)
             ctx.record_input(f, role="skill_maps")
             label = _model_label(cfg, system, model)

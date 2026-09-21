@@ -11,7 +11,13 @@
 # Method taken from the CAPC-AC reference chain (compute_scores_v2.R), with two
 # deliberate differences:
 #   * brier() is called with fine thresholds: its default bins the probabilities
-#     into ten classes, which shifts the score;
+#     into ten classes, which shifts the score. Its own reliability/resolution
+#     decomposition is then unusable (with one forecast per class, reliability
+#     collapses onto the BS and resolution onto the uncertainty), and the
+#     package's binned decomposition does not close either (rel - res + unc
+#     differs from its own bs). The decomposition is therefore computed here,
+#     over the same ten classes as the reliability diagram, so that
+#     rel - res + unc = bs_binned exactly (checked by a test);
 #   * every field of the package is read through getf(), which returns NA when a
 #     field is missing instead of aborting the block.
 #
@@ -53,6 +59,29 @@ groc_score <- function(P, obs_cat) {
     num <- num + if (f > 0.5) 1 else if (f == 0.5) 0.5 else 0
   }
   if (den == 0) NA_real_ else num / den
+}
+
+# Murphy decomposition over the reliability classes:
+#   BS(classes) = fiabilite - resolution + incertitude
+# with fiabilite = sum n_k (f_k - o_k)^2 / N, resolution = sum n_k (o_k - obar)^2 / N
+# and incertitude = obar (1 - obar).
+brier_decomposition <- function(prob, event) {
+  bks <- seq(0, 1, length.out = N_BINS + 1)
+  n <- length(event); obar <- mean(event)
+  rel <- 0; res <- 0; bs_bin <- 0
+  for (ib in seq_len(N_BINS)) {
+    inb <- prob >= bks[ib] & (if (ib == N_BINS) prob <= bks[ib + 1] else prob < bks[ib + 1])
+    inb[is.na(inb)] <- FALSE
+    nk <- sum(inb)
+    if (nk == 0) next
+    fk <- mean(prob[inb]); ok <- mean(event[inb])
+    rel <- rel + nk * (fk - ok)^2
+    res <- res + nk * (ok - obar)^2
+    bs_bin <- bs_bin + nk * ((fk - ok)^2 - (ok - obar)^2)
+  }
+  unc <- obar * (1 - obar)
+  list(reliability = rel / n, resolution = res / n, uncertainty = unc,
+       bs_binned = bs_bin / n + unc)
 }
 
 reliability_bins <- function(prob, event, period, item) {
@@ -133,15 +162,19 @@ for (per in periods) {
     name <- c("BN", "NN", "AN")[k]
     ev <- as.integer(dd$obs_cat == (k - 1))
     pr <- P[, k]
+    # exact score from the package (fine thresholds), decomposition computed over
+    # the reliability classes: see the note at the top of the file.
     b <- tryCatch(brier(obs = ev, pred = pr, baseline = rep(CLIM_P, length(ev)), thresholds = FINE),
                   error = function(e) NULL)
+    dc <- brier_decomposition(pr, ev)
     ra <- if (length(unique(ev)) > 1)
       tryCatch(roc.area(obs = ev, pred = pr), error = function(e) NULL) else NULL
     cat_rows[[length(cat_rows) + 1]] <- data.frame(
       label = LABEL, period = per, category = name, n_years = length(ev),
       base_rate = round(mean(ev), 6), bs = getf(b, "bs"), bs_clim = getf(b, "bs.baseline"),
-      bss = getf(b, "ss"), bs_reliability = getf(b, "bs.reliability"),
-      bs_resolution = getf(b, "bs.resol"), bs_uncertainty = getf(b, "bs.uncert"),
+      bss = getf(b, "ss"), bs_binned = round(dc$bs_binned, 6),
+      bs_reliability = round(dc$reliability, 6), bs_resolution = round(dc$resolution, 6),
+      bs_uncertainty = round(dc$uncertainty, 6), n_bins_decomposition = N_BINS,
       roc_area = getf(ra, "A"), roc_pvalue = getf(ra, "p.value"),
       stringsAsFactors = FALSE)
     rel_rows[[length(rel_rows) + 1]] <- reliability_bins(pr, ev, per, name)

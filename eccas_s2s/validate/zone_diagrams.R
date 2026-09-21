@@ -128,11 +128,33 @@ roc_envelope <- function(prob, event, year, grid = seq(0, 1, 0.02)) {
 }
 
 # ------------------------------------------------------------------ panels
+# Sharpness in its own panel under the diagram: drawn as an inset it covered the
+# markers and the confidence bars of the upper-right bins.
+sharp_panel <- function(tabs) {
+  cmax <- max(unlist(lapply(tabs, function(t) max(t$n_pairs, na.rm = TRUE))), na.rm = TRUE)
+  plot(NA, xlim = c(0, 1), ylim = c(0, cmax * 1.12), xaxs = "i", yaxs = "i",
+       xlab = "Probabilité prévue", ylab = "Effectif", cex.lab = 1.0, cex.axis = 0.9,
+       main = sprintf("Netteté — %d couples par catégorie (%d classes)",
+                      sum(tabs[[1]]$n_pairs, na.rm = TRUE), nrow(tabs[[1]])),
+       font.main = 1, cex.main = 0.85)
+  grid(nx = NA, ny = NULL, col = "grey90")
+  nb <- nrow(tabs[[1]]); bw <- 1 / nb; sub <- bw / (length(CATS) + 0.6)
+  for (ib in seq_len(nb)) for (k in seq_along(CATS)) {
+    t <- tabs[[k]]
+    if (!is.finite(t$n_pairs[ib]) || t$n_pairs[ib] <= 0) next
+    xa <- (ib - 1) * bw + (k - 1) * sub + sub * 0.35
+    rect(xa, 0, xa + sub * 0.85, t$n_pairs[ib],
+         col = if (t$sparse[ib] == 0) CAT_COL[CATS[k]] else SPARSE_COL, border = NA)
+  }
+  abline(h = 0, col = "grey40")
+  box()
+}
+
 # The three categories share one set of axes (one figure per period), so the
 # reader sees at a glance whether the overconfidence of "below normal" is the
 # same as that of "above normal".
 rel_figure <- function(tabs, main) {
-  plot(NA, xlim = c(0, 1), ylim = c(0, 1), asp = 1, xlab = "Probabilité prévue",
+  plot(NA, xlim = c(0, 1), ylim = c(0, 1), xaxs = "i", yaxs = "i", xlab = "Probabilité prévue",
        ylab = "Fréquence observée", main = main, font.main = 2, cex.main = 1.0,
        cex.lab = 1.0, cex.axis = 0.9)
   # skill region of the attributes diagram: a bin helps the Brier skill score
@@ -173,23 +195,6 @@ rel_figure <- function(tabs, main) {
          col = c(SPARSE_COL, SPARSE_COL, "grey60"),
          pt.bg = c(NA, NA, adjustcolor("green", alpha.f = 0.18)))
 
-  # sharpness: the three histograms side by side inside each bin, in user
-  # coordinates (par(fig=) would disturb the main plot).
-  x0 <- 0.515; x1 <- 0.975; y0 <- 0.045; y1 <- 0.325
-  rect(x0, y0, x1, y1, col = adjustcolor("white", alpha.f = 0.92), border = "grey55", lwd = 0.7)
-  nb <- nrow(tabs[[1]]); bw <- (x1 - x0) / nb; sub <- bw / (length(CATS) + 0.5)
-  for (ib in seq_len(nb)) for (k in seq_along(CATS)) {
-    t <- tabs[[k]]
-    h <- (t$n_pairs[ib] / cmax) * (y1 - y0) * 0.62
-    if (!is.finite(h) || h <= 0) next
-    xa <- x0 + (ib - 1) * bw + (k - 1) * sub + sub * 0.25
-    rect(xa, y0 + 0.004, xa + sub * 0.8, y0 + 0.004 + h,
-         col = if (t$sparse[ib] == 0) CAT_COL[CATS[k]] else SPARSE_COL,
-         border = NA)
-  }
-  text((x0 + x1) / 2, y1 - 0.008,
-       sprintf("Netteté (N=%d par catégorie)", sum(tabs[[1]]$n_pairs, na.rm = TRUE)),
-       cex = 0.6, adj = c(0.5, 1))
 }
 
 roc_figure <- function(rocs, envs, areas, main) {
@@ -262,11 +267,17 @@ for (per in unique(pairs$period)) {
   }
   sub <- sprintf("%s — %s  (points de grille poolés)", LABEL, per)
 
-  png_open(file.path(OUT, sprintf("reliability_%s.png", per)), w = 1100, h = 1100)
-  op <- par(mar = c(4.2, 4.2, 4.0, 1.0))
-  rel_figure(tabs, "Diagramme de fiabilité (attributs) — terciles")
-  mtext(sub, side = 3, line = 0.4, cex = 0.85)
-  par(op); dev.off()
+  png_open(file.path(OUT, sprintf("reliability_%s.png", per)), w = 1150, h = 1400)
+  op <- par(oma = c(0, 0, 3.2, 0))
+  layout(matrix(c(1, 2), nrow = 2), heights = c(3.1, 1))
+  par(mar = c(4.2, 4.4, 1.2, 1.4))
+  rel_figure(tabs, "")
+  par(mar = c(4.2, 4.4, 2.2, 1.4))
+  sharp_panel(tabs)
+  mtext("Diagramme de fiabilité (attributs) — terciles", outer = TRUE, font = 2,
+        cex = 1.0, line = 1.2)
+  mtext(sub, outer = TRUE, cex = 0.85, line = 0.0)
+  layout(1); par(op); dev.off()
 
   png_open(file.path(OUT, sprintf("roc_%s.png", per)), w = 1100, h = 1100)
   op <- par(mar = c(4.2, 4.2, 4.0, 1.0))

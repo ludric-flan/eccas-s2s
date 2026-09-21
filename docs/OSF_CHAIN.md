@@ -42,6 +42,7 @@ Les cartes de scores par point de grille sont calculées en Python (`eccas_s2s.v
 | E4 · cartes de skill | `python scripts/run_plot_skill_raw.py --config config/cycle_202609.yaml --scores pearson rpss roc_area msess` | P2 |
 | E4 · diagrammes de fiabilité et ROC (R) | `python scripts/run_skill_diagrams.py --config config/cycle_202609.yaml --scales month season --zones domain` | P2 |
 | E4 · reconstruire le tableau de synthèse depuis les cartes | `python scripts/run_skill_raw.py --config config/cycle_202609.yaml --from-maps` | P2 |
+| E4 · recalculer les scores de zone depuis les couples archivés | `python scripts/run_skill_raw.py --config config/cycle_202609.yaml --from-pairs` | P2 |
 | … | (ajoutés au fil des phases) | |
 
 Chaque étape existe aussi en notebook opérationnel (voir plus bas). Scripts et notebooks appellent la même fonction `run(...)` de `eccas_s2s/operations/`.
@@ -106,6 +107,8 @@ Les modules historiques (`eccas_s2s.config`, `core.processing`, `pipeline`) sont
 - **Grilles :** CHIRPS 0,05° et C3S 1° sont emboîtées (20 × 20) : passage à 1° par moyenne par blocs exacte. Coordonnées CHIRPS recalées (stockées en simple précision).
 - **Température :** observation = T2m horaire ERA5 (0,25°) agrégée en moyenne, maximum et minimum journaliers UTC ; modèles = Tmax/Tmin quotidiens C3S et T2m des **statistiques mensuelles** C3S (mois et saisons seulement).
 - **NMME :** moyenne d'ensemble seulement (pas de membres) et fichiers **mensuels** ; donc mois et saisons uniquement (jamais de décades), et **aucune probabilité brute** : pas de RPSS, de score de Brier ni d'aire ROC. Ces modèles sont notés sur les scores déterministes, et leur éligibilité (§3.3) ne retient que le critère déterministe ; leurs probabilités ne pourront venir que de la calibration (P3). Les échelles autorisées par système sont dans `SYSTEM_SCALES` (`eccas_s2s/operations/skill_raw.py`).
+- **Score de Brier :** `verification::brier` est appelé deux fois — seuils fins pour le score et le BSS (le classement par défaut en dix classes déplace la valeur), classement par défaut pour la décomposition fiabilité / résolution / incertitude (avec des seuils fins chaque classe ne contient qu'une prévision : la fiabilité se confond avec le score et la résolution avec l'incertitude). Les deux cas sont couverts par un test.
+- **Couples archivés :** `zones/<modèle>/<zone>/pairs.csv` conserve les couples ; `--from-pairs` rejoue les scores R en quelques minutes après une correction du script, sans relire les hindcasts.
 - **Diagrammes de fiabilité et ROC :** tracés en R, à partir des couples de **tous les points de grille** de la zone (24 années seules ne remplissent pas dix classes de probabilité). Les intervalles de confiance rééchantillonnent des **années entières** (les points de grille voyagent avec leur année), et une classe alimentée par trop peu d'années est marquée d'une croix grise hors de la courbe. Une figure de fiabilité et une figure ROC par période, les trois catégories sur le même repère.
 - **Hindcasts C3S :** demandés avec un jour d'échéance de plus, pour couvrir le 29 février des années bissextiles.
 - **Horizon :** `max_lead_days` = horizon **reçu** (DWD 181 j, Météo-France 212 j pour l'init. 09) ; le contrôle qualité signale tout écart avec la configuration.

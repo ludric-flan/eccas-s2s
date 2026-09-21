@@ -174,9 +174,17 @@ def map_panel(fields, titles, *, shapefile=None, logo=None, extent=DEFAULT_EXTEN
     nrows = int(np.ceil(n / ncols))
     lon_span = extent[1] - extent[0]
     lat_span = extent[3] - extent[2]
-    figsize = (ncols * panel_width, nrows * panel_width * lat_span / lon_span + 2.0)
+    map_height = nrows * panel_width * lat_span / lon_span
+    # fixed room for the title (and the logo beside it) above and the colour bar
+    # below: letting matplotlib centre the maps in the leftover space left a wide
+    # empty band under the title.
+    head = 0.75 + 0.22 * suptitle.count("\n")
+    foot = 0.85
+    figsize = (ncols * panel_width, map_height + head + foot)
     fig, axes = plt.subplots(nrows, ncols, figsize=figsize,
                              subplot_kw={"projection": ccrs.PlateCarree()}, squeeze=False)
+    fig.subplots_adjust(top=1 - head / figsize[1], bottom=foot / figsize[1],
+                        left=0.05, right=0.98, wspace=0.08, hspace=0.14)
     norm, cm = _norm(levels, cmap, extend)
     mesh = None
     for i, ax in enumerate(axes.flat):
@@ -190,14 +198,17 @@ def map_panel(fields, titles, *, shapefile=None, logo=None, extent=DEFAULT_EXTEN
                              vmin=None if norm else vmin, vmax=None if norm else vmax,
                              shading="nearest", transform=ccrs.PlateCarree())
         ax.set_title(titles[i], fontsize=9)
-    fig.colorbar(mesh, ax=axes.ravel().tolist(), orientation="horizontal", shrink=0.6,
-                 pad=0.04, aspect=40, extend=extend, label=cbar_label)
+    # colour bar in its own axes: 0.16 inch tall, 0.40 inch above the bottom edge,
+    # so it keeps the same look whatever the number of rows.
+    cax = fig.add_axes([0.32, 0.40 / figsize[1], 0.36, 0.16 / figsize[1]])
+    cbar = fig.colorbar(mesh, cax=cax, orientation="horizontal", extend=extend, label=cbar_label)
+    cbar.ax.tick_params(labelsize=9)
     if suptitle:
-        fig.suptitle(suptitle, fontsize=12, fontweight="bold")
+        fig.suptitle(suptitle, fontsize=12, fontweight="bold", y=1 - 0.10 / figsize[1], va="top")
     add_figure_logo(fig, logo)
     if output_path:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(output_path, dpi=DPI, bbox_inches="tight", facecolor="white")
+        fig.savefig(output_path, dpi=DPI, facecolor="white")   # the layout is already tight
         plt.close(fig)
         return Path(output_path)
     return fig
