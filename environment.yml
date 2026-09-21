@@ -44,6 +44,12 @@ dependencies:
   - xesmf
   - esmpy
 
+  # --- Verification scores in R (package `verification`, used for the
+  #     zone-average scores; see eccas_s2s/validate/r_bridge.py) ---
+  - r-base>=4.2
+  - r-verification
+  - r-boot
+
   # --- Climate / verification ---
   - xarray>=2024.6
   - cf_xarray

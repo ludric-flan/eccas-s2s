@@ -6,10 +6,20 @@ La chaîne tourne **chaque mois** avec l'initialisation du mois (1 cycle = 1 fic
 ## Environnement
 
 ```bash
+conda env create -f environment.yml    # inclut R, r-verification et r-boot
 conda activate eccas-s2s
-pip install -e .          # une fois
-pytest -q                 # tous les tests doivent passer
+pip install -e .                       # une fois
+pytest -q                              # tous les tests doivent passer
 ```
+
+**Scores de vérification en R.** Les scores de zone (RPS/RPSS, Brier et sa décomposition, ROC et sa p-value, CRPS, Heidke/Peirce/Gerrity, diagrammes de fiabilité) sont calculés avec le paquet R `verification`, comme dans la chaîne de référence du CAPC-AC. L'environnement conda l'installe ; si R est déjà présent sur la machine :
+
+```bash
+Rscript -e 'install.packages(c("verification","boot"), repos="https://cloud.r-project.org")'
+python -c "from eccas_s2s.validate.r_bridge import check_packages; print(check_packages())"
+```
+
+Les cartes de scores par point de grille sont calculées en Python (`eccas_s2s.validate.scores`) ; un test compare les deux implémentations.
 
 ## Démarrer un nouveau cycle mensuel
 
