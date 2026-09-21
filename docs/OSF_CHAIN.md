@@ -38,11 +38,10 @@ Les cartes de scores par point de grille sont calculées en Python (`eccas_s2s.v
 | E1 · température observée ERA5 (horaire → journalier) | `python scripts/run_download_era5_hourly.py --config ... --years 1981 2026 --workers 4` | P1 |
 | E1 · référence ERA5 (archive + normales) | `python scripts/run_obs_era5.py --config config/cycle_202609.yaml` | P1 |
 | E2 · NMME (téléchargement puis périodes) | `python scripts/run_download_nmme.py --config ...` puis `run_nmme_totals.py` | P1 |
-| E4 · skill brut (cartes + scores de zone R) | `python scripts/run_skill_raw.py --config config/cycle_202609.yaml --systems c3s nmme --variables precip t2m tmax tmin` | P2 |
-| E4 · cartes de skill | `python scripts/run_plot_skill_raw.py --config config/cycle_202609.yaml --scores pearson rpss roc_area msess` | P2 |
-| E4 · diagrammes de fiabilité et ROC (R) | `python scripts/run_skill_diagrams.py --config config/cycle_202609.yaml --scales month season --zones domain` | P2 |
-| E4 · reconstruire le tableau de synthèse depuis les cartes | `python scripts/run_skill_raw.py --config config/cycle_202609.yaml --from-maps` | P2 |
-| E4 · recalculer les scores de zone depuis les couples archivés | `python scripts/run_skill_raw.py --config config/cycle_202609.yaml --from-pairs` | P2 |
+| E4 · skill brut (scores par point de grille, netCDF) | `python scripts/run_skill_raw.py --config config/cycle_202609.yaml --systems c3s nmme --variables precip t2m tmax tmin` | P2 |
+| E4 · cartes de skill (une carte par période) | `python scripts/run_plot_skill_raw.py --config config/cycle_202609.yaml --metrics pearson rpss roc_area groc` | P2 |
+| E4 · diagrammes de fiabilité et ROC (R) | `python scripts/run_skill_diagrams.py --config config/cycle_202609.yaml --scales month season` | P2 |
+| E4 · reconstruire le tableau de synthèse depuis les netCDF | `python scripts/run_skill_raw.py --config config/cycle_202609.yaml --from-maps` | P2 |
 | … | (ajoutés au fil des phases) | |
 
 Chaque étape existe aussi en notebook opérationnel (voir plus bas). Scripts et notebooks appellent la même fonction `run(...)` de `eccas_s2s/operations/`.
@@ -59,9 +58,9 @@ Tester une requête sans télécharger : ajouter `--dry-run`.
 | Valeurs NMME par période | `DATA_OSF/derived/nmme/<YYYYMM>/` |
 | Cumuls C3S par période | `DATA_OSF/derived/c3s/<YYYYMM>/` |
 | Journaux et manifestes d'exécution | `OUTPUTS_OSF/runs/<run_id>/{run.log, manifest.json}` |
-| Cartes de skill brut | `OUTPUTS_OSF/skill/<YYYYMM>/raw/maps/<système>_<modèle>_<variable>_skill.nc` |
-| Scores de zone (R) | `OUTPUTS_OSF/skill/<YYYYMM>/raw/zones/<système>_<modèle>_<variable>/<zone>/` |
-| Figures de skill | `OUTPUTS_OSF/skill/<YYYYMM>/raw/figures/` et `.../diagrams/<...>/<zone>/` |
+| Scores de skill (netCDF, un fichier par métrique) | `OUTPUTS_OSF/skill/<YYYYMM>/raw/netcdf/<système>_<modèle>/<échelle>/<variable>/<métrique>.nc` |
+| Cartes de skill (une par période) | `…/raw/figures/<système>_<modèle>/<échelle>/<variable>/<métrique>/<période>.png` |
+| Diagrammes fiabilité et ROC | `…/raw/diagrams/<système>_<modèle>/<échelle>/<variable>/{reliability,roc}/<période>.png` |
 | Synthèse et éligibilité | `OUTPUTS_OSF/skill/<YYYYMM>/raw/skill_raw_summary.csv`, `OUTPUTS_OSF/registry/models_eligibility.csv` |
 | Prévisions émises (archive) | `ARCHIVE_OSF/<YYYY>/<MM>/<run_id>/` |
 
@@ -87,9 +86,9 @@ Tester une requête sans télécharger : ajouter `--dry-run`.
 | `eccas_s2s.validate.cv` | validation croisée LOYO (moyenne et quantiles laissant l'année dehors) |
 | `eccas_s2s.validate.pairs` | couples prévision/observation, catégories observées et probabilités des terciles |
 | `eccas_s2s.validate.scores` | scores par maille (déterministes, RPS/RPSS, Brier, aire ROC) |
-| `eccas_s2s.validate.zones` | masques du domaine et des trois zones pluviométriques, fraction de skill positif |
+| `eccas_s2s.core.geo` | masque CEEAC (point de grille dans le shapefile), fraction de surface au-dessus d'un seuil |
 | `eccas_s2s.validate.pooled` | couples de tous les points de grille d'une zone, pour les diagrammes |
-| `eccas_s2s.validate.r_bridge` + `zone_scores.R` + `zone_diagrams.R` | scores de zone et diagrammes avec le paquet R `verification` |
+| `eccas_s2s.validate.r_bridge` + `zone_diagrams.R` | diagrammes de fiabilité et ROC avec le paquet R `verification` (`zone_scores.R` ne sert plus qu'au contrôle croisé Python ↔ R des tests) |
 | `eccas_s2s.viz.ceeac_maps` | cartes à la charte CAPC-AC (shapefile CEEAC, logo, barre de couleur commune) |
 | `eccas_s2s.operations.*` | étapes opérationnelles (`run(...)` + `main(argv)`) : `download_c3s`, `qc_c3s`, `obs_chirps`, `c3s_totals` |
 
@@ -109,7 +108,10 @@ Les modules historiques (`eccas_s2s.config`, `core.processing`, `pipeline`) sont
 - **NMME :** moyenne d'ensemble seulement (pas de membres) et fichiers **mensuels** ; donc mois et saisons uniquement (jamais de décades), et **aucune probabilité brute** : pas de RPSS, de score de Brier ni d'aire ROC. Ces modèles sont notés sur les scores déterministes, et leur éligibilité (§3.3) ne retient que le critère déterministe ; leurs probabilités ne pourront venir que de la calibration (P3). Les échelles autorisées par système sont dans `SYSTEM_SCALES` (`eccas_s2s/operations/skill_raw.py`).
 - **Score de Brier :** `verification::brier` est appelé deux fois — seuils fins pour le score et le BSS (le classement par défaut en dix classes déplace la valeur), classement par défaut pour la décomposition fiabilité / résolution / incertitude (avec des seuils fins chaque classe ne contient qu'une prévision : la fiabilité se confond avec le score et la résolution avec l'incertitude). Les deux cas sont couverts par un test.
 - **Couples archivés :** `zones/<modèle>/<zone>/pairs.csv` conserve les couples ; `--from-pairs` rejoue les scores R en quelques minutes après une correction du script, sans relire les hindcasts.
-- **Diagrammes de fiabilité et ROC :** tracés en R, à partir des couples de **tous les points de grille** de la zone (24 années seules ne remplissent pas dix classes de probabilité). Les intervalles de confiance rééchantillonnent des **années entières** (les points de grille voyagent avec leur année), et une classe alimentée par trop peu d'années est marquée d'une croix grise hors de la courbe. Une figure de fiabilité et une figure ROC par période, les trois catégories sur le même repère.
+- **Masque CEEAC :** tout ce qui est vérifié, cartographié et publié est restreint aux mailles dont le centre tombe dans le shapefile CEEAC (`eccas_s2s.core.geo`, même définition que `create_geographic_mask` de la chaîne de référence). Il n'y a plus de traitement par zones : les scores sont calculés point de grille par point de grille, ce qui est plus détaillé qu'une moyenne de zone.
+- **Organisation des sorties :** trois arbres (`netcdf/`, `figures/`, `diagrams/`) partageant les mêmes branches `<système>_<modèle>/<échelle>/<variable>/<métrique>/`. Un netCDF par métrique, une carte par période (dates explicites : « Novembre 2026 », « OND 2026 », « 1ʳᵉ décade de Novembre 2026 »).
+- **Lecture des cartes de skill :** même grille de lecture pour toutes les métriques — **gris sous la valeur sans skill, vert au-dessus** — et une phrase sous chaque carte rappelant la condition de bon skill (AUC > 0,5, RPSS > 0, …).
+- **Diagrammes de fiabilité et ROC :** tracés en R, à partir des couples de **tous les points de grille du masque** (24 années seules ne remplissent pas dix classes de probabilité). Les intervalles de confiance rééchantillonnent des **années entières** (les points de grille voyagent avec leur année), et une classe alimentée par trop peu d'années est marquée d'une croix grise hors de la courbe. Une figure de fiabilité et une figure ROC par période, les trois catégories sur le même repère.
 - **Hindcasts C3S :** demandés avec un jour d'échéance de plus, pour couvrir le 29 février des années bissextiles.
 - **Horizon :** `max_lead_days` = horizon **reçu** (DWD 181 j, Météo-France 212 j pour l'init. 09) ; le contrôle qualité signale tout écart avec la configuration.
 

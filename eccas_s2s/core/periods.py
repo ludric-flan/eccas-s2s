@@ -32,6 +32,8 @@ import pandas as pd
 _MONTH_INITIALS = "JFMAMJJASOND"
 _MONTH_ABBR_FR = ["janv.", "févr.", "mars", "avr.", "mai", "juin",
                   "juil.", "août", "sept.", "oct.", "nov.", "déc."]
+_MONTH_NAME_FR = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet",
+                  "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
 
 
 def _shift_month(year: int, month: int, offset: int) -> tuple[int, int]:
@@ -106,15 +108,26 @@ class Period:
         years = f"{start:%Y}" if start.year == end.year else f"{start:%Y}-{end:%y}"
         return f"{acronym} {years}"
 
-    def label_fr(self, init_year: int) -> str:
-        """French label for maps and bulletins."""
+    def label_fr(self, init_year: int, with_dates: bool = False) -> str:
+        """
+        Explicit French label for maps and bulletins.
+
+        ``Novembre 2026``, ``OND 2026``, ``1ʳᵉ décade de Novembre 2026``; with
+        ``with_dates`` the exact window is appended, as the reference chain does
+        on its product maps (``format_period_label`` of ``s2s_plotting_v2.py``).
+        """
         start, end = self.dates(init_year)
         if self.scale == "decade":
             ordinal = "1ʳᵉ" if self.decade == 1 else f"{self.decade}ᵉ"
-            return f"{ordinal} décade {_MONTH_ABBR_FR[start.month - 1]} {start:%Y}"
-        if self.scale == "month":
-            return f"{_MONTH_ABBR_FR[start.month - 1]} {start:%Y}"
-        return self.label(init_year)
+            head = f"{ordinal} décade de {_MONTH_NAME_FR[start.month - 1]} {start:%Y}"
+        elif self.scale == "month":
+            head = f"{_MONTH_NAME_FR[start.month - 1]} {start:%Y}"
+        else:
+            head = self.label(init_year)
+        if not with_dates:
+            return head
+        return (f"{head} ({start:%d} {_MONTH_ABBR_FR[start.month - 1]} – "
+                f"{end:%d} {_MONTH_ABBR_FR[end.month - 1]} {end:%Y})")
 
 
 def build_periods(init_date: pd.Timestamp, horizon_days: int,

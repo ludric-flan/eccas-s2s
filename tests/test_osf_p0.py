@@ -133,8 +133,13 @@ def test_decade_d3_and_leap_years():
 
 
 def test_labels_fr():
-    assert Period("decade", 9, 0, decade=1).label_fr(2026) == "1ʳᵉ décade sept. 2026"
-    assert Period("decade", 9, 1, decade=2).label_fr(2026) == "2ᵉ décade oct. 2026"
+    # noms de mois explicites, comme sur les cartes de la chaîne de référence
+    assert Period("decade", 9, 0, decade=1).label_fr(2026) == "1ʳᵉ décade de Septembre 2026"
+    assert Period("decade", 9, 1, decade=2).label_fr(2026) == "2ᵉ décade de Octobre 2026"
+    assert Period("month", 9, 2).label_fr(2026) == "Novembre 2026"
+    assert Period("season", 9, 1, n_months=3).label_fr(2026) == "OND 2026"
+    assert Period("month", 9, 2).label_fr(2026, with_dates=True) == \
+        "Novembre 2026 (01 nov. – 30 nov. 2026)"
 
 
 # ---------------------------------------------------------- daily totals

@@ -233,34 +233,42 @@ def _grid(nlat=6, nlon=4):
                         coords={"latitude": lat, "longitude": lon})
 
 
-def test_zone_masks_and_fraction_positive():
-    from eccas_s2s.validate.zones import DOMAIN, fraction_positive, zone_masks
-    domains = {"domain": {"extent": [10.0, 15.0, -3.0, 3.0]},   # wide enough for every cell
-               "zones": {"north": {"lat": [0.0, 3.0]}, "south": {"lat": [-3.0, 0.0]}}}
-    ref = _grid()
-    valid = ref.notnull()
-    valid[0, 0] = False
-    masks = zone_masks(ref, domains, valid=valid)
-    assert set(masks) == {DOMAIN, "north", "south"}
-    assert int(masks[DOMAIN].sum()) == ref.size - 1          # the invalid cell is excluded
-    assert int(masks["north"].sum()) + int(masks["south"].sum()) == int(masks[DOMAIN].sum())
+def test_ceeac_mask_and_area_fraction(tmp_path):
+    """The mask keeps the cells whose centre falls inside the shapefile polygons."""
+    import geopandas as gpd
+    from shapely.geometry import box
+    from eccas_s2s.core.geo import ceeac_mask, fraction_above
 
-    score = xr.full_like(ref, 0.5)
-    score[:3, :] = -0.5
-    frac = fraction_positive(score, masks[DOMAIN])
-    assert 0.45 < frac < 0.55                                 # about half the (weighted) area
+    shp = tmp_path / "zone.shp"
+    gpd.GeoDataFrame({"name": ["carré"]}, geometry=[box(10.0, -2.0, 14.0, 2.0)],
+                     crs="EPSG:4326").to_file(shp)
+    lat = np.arange(-4.5, 5.0, 1.0)
+    lon = np.arange(8.5, 17.0, 1.0)
+    mask = ceeac_mask(str(shp), lat, lon)
+    assert mask.dims == ("latitude", "longitude")
+    assert bool(mask.sel(latitude=0.5, longitude=10.5))          # inside
+    assert not bool(mask.sel(latitude=3.5, longitude=10.5))      # north of the box
+    assert not bool(mask.sel(latitude=0.5, longitude=16.5))      # east of the box
+    assert int(mask.sum()) == 4 * 4
 
-
-def test_fraction_positive_ignores_nan():
-    from eccas_s2s.validate.zones import fraction_positive
-    ref = _grid()
-    mask = ref.notnull()
-    score = xr.full_like(ref, np.nan)
-    score[0, :] = 1.0
-    assert fraction_positive(score, mask) == pytest.approx(1.0)
+    score = xr.zeros_like(mask, dtype=float) - 1.0
+    score = score.where(mask)
+    score.loc[dict(latitude=0.5)] = 1.0
+    frac = fraction_above(score, mask)
+    assert 0.2 < frac < 0.3                                       # one row out of four
 
 
-# ------------------------------------------------- pooled pairs and diagrams
+def test_fraction_above_ignores_nan():
+    from eccas_s2s.core.geo import fraction_above
+
+    lat, lon = np.array([0.0, 1.0]), np.array([0.0, 1.0])
+    mask = xr.DataArray(np.ones((2, 2), bool), dims=("latitude", "longitude"),
+                        coords={"latitude": lat, "longitude": lon})
+    score = xr.DataArray([[1.0, np.nan], [2.0, np.nan]], dims=("latitude", "longitude"),
+                         coords={"latitude": lat, "longitude": lon})
+    assert fraction_above(score, mask) == pytest.approx(1.0)
+
+
 def _grid_ensemble(n_years=24, n_members=8, ny=6, nx=7, seed=7):
     """A small hindcast on a grid, with a shared signal so the skill is not zero."""
     rng = np.random.default_rng(seed)
@@ -328,8 +336,11 @@ def test_zone_diagrams_draw_two_figures(tmp_path):
     fc, ob = _grid_ensemble()
     ds = build_pairs(fc, ob)
     frame = pooled_frame(ds, _mask_of(ob))
-    figures = run_zone_diagrams(frame, tmp_path, "test|precip|domain", n_boot=30)
-    assert [f.name for f in figures] == ["reliability_SON.png", "roc_SON.png"]
+    frame["period_label"] = "SON 2026"
+    figures = run_zone_diagrams(frame, tmp_path, "test|precip|CEEAC", n_boot=30)
+    # une figure par métrique, dans son propre dossier
+    assert sorted(str(f.relative_to(tmp_path)) for f in figures) == [
+        "reliability/SON.png", "roc/SON.png"]
     scores = pd.read_csv(tmp_path / "diagram_scores.csv")
     assert list(scores["category"]) == ["BN", "NN", "AN"]
     # the R area of the pooled sample is the pooled version of the Python map
@@ -359,10 +370,9 @@ def test_summary_rows_without_probabilities():
     maps = deterministic_scores(pairs["ensmean"], pairs["obs"]).assign_coords(
         label=("period", ["SON 2026"]), scale=("period", ["season"]))
     maps.attrs.update(n_years=24, n_members=0)
-    rows = summary_rows(maps, {"domain": _mask_of(ob)}, "nmme", "CFSv2", "precip",
-                        {"SON": 0})
+    rows = summary_rows(maps, _mask_of(ob), "nmme", "CFSv2", "precip", {"SON": 0})
     assert len(rows) == 1 and rows[0]["probabilistic"] is False
-    assert "rpss_domain_median" not in rows[0] and "frac_rpss_positive" not in rows[0]
+    assert "rpss_median" not in rows[0] and "frac_rpss_positive" not in rows[0]
     assert rows[0]["eligible"] == (rows[0]["frac_pearson_positive"] >= 0.05)
 
 

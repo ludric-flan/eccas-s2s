@@ -110,7 +110,7 @@ def run_zone_diagrams(frame: pd.DataFrame, out_dir: str | Path, label: str,
                           str(int(n_boot))], capture_output=True, text=True, timeout=7200)
     if res.returncode != 0:
         raise RNotAvailable(f"zone_diagrams.R a échoué ({label}) :\n{res.stderr[-800:]}")
-    return sorted(list(out_dir.glob("reliability_*.png")) + list(out_dir.glob("roc_*.png")))
+    return sorted(out_dir.glob("*/*.png"))
 
 
 def run_zone_scores(frame: pd.DataFrame, out_dir: str | Path, label: str,

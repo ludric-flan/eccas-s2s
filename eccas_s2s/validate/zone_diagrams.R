@@ -21,7 +21,11 @@
 # The areas come from verification::roc.area, so the figure and the CSV scores
 # are computed by the same implementation (Draft §5.2).
 #
-# Input columns : period, year, cell, obs_cat, pBN, pNN, pAN
+# Files are written as <out_dir>/reliability/<period>.png and
+# <out_dir>/roc/<period>.png, one metric per folder, as the rest of the chain does.
+#
+# Input columns : period (key, used for the file name), period_label (French label
+# for the title), year, cell, obs_cat, pBN, pNN, pAN
 # Usage: Rscript zone_diagrams.R <pooled_pairs.csv> <out_dir> <label> [n_boot]
 # =============================================================================
 
@@ -34,7 +38,8 @@ if (length(args) < 3) {
 }
 PAIRS <- args[1]; OUT <- args[2]; LABEL <- args[3]
 N_BOOT <- if (length(args) > 3) as.integer(args[4]) else 200
-dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(OUT, "reliability"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(OUT, "roc"), recursive = TRUE, showWarnings = FALSE)
 
 CATS      <- c("BN", "NN", "AN")
 CAT_NAME  <- c(BN = "Déficitaire", NN = "Normal", AN = "Excédentaire")
@@ -254,7 +259,7 @@ for (per in unique(pairs$period)) {
                  hi = if (is.null(env)) NA_real_ else unname(env$auc_ci[2]),
                  n = length(ev), n_years = length(unique(d$year)))
     tabs[[k]] <- tab; rocs[[k]] <- roc_points(pr, ev); areas[[k]] <- area; envs[[k]] <- env
-    bin_rows[[length(bin_rows) + 1]] <- data.frame(label = LABEL, period = per,
+      bin_rows[[length(bin_rows) + 1]] <- data.frame(label = LABEL, period = per,
                                                    category = CATS[k], tab)
     summary_rows[[length(summary_rows) + 1]] <- data.frame(
       label = LABEL, period = per, category = CATS[k], n_pairs = area$n,
@@ -265,9 +270,10 @@ for (per in unique(pairs$period)) {
       reliability = round(sum(tab$n_pairs * (tab$mean_frcst - tab$obs_freq)^2, na.rm = TRUE) / sum(tab$n_pairs), 6),
       stringsAsFactors = FALSE)
   }
-  sub <- sprintf("%s — %s  (points de grille poolés)", LABEL, per)
+  per_label <- if ("period_label" %in% names(d)) as.character(d$period_label[1]) else per
+  sub <- sprintf("%s — %s  (points de grille CEEAC poolés)", LABEL, per_label)
 
-  png_open(file.path(OUT, sprintf("reliability_%s.png", per)), w = 1150, h = 1400)
+  png_open(file.path(OUT, "reliability", sprintf("%s.png", per)), w = 1150, h = 1400)
   op <- par(oma = c(0, 0, 3.2, 0))
   layout(matrix(c(1, 2), nrow = 2), heights = c(3.1, 1))
   par(mar = c(4.2, 4.4, 1.2, 1.4))
@@ -279,7 +285,7 @@ for (per in unique(pairs$period)) {
   mtext(sub, outer = TRUE, cex = 0.85, line = 0.0)
   layout(1); par(op); dev.off()
 
-  png_open(file.path(OUT, sprintf("roc_%s.png", per)), w = 1100, h = 1100)
+  png_open(file.path(OUT, "roc", sprintf("%s.png", per)), w = 1100, h = 1100)
   op <- par(mar = c(4.2, 4.2, 4.0, 1.0))
   roc_figure(rocs, envs, areas, "Diagramme ROC — terciles")
   mtext(sub, side = 3, line = 0.4, cex = 0.85)
@@ -291,4 +297,4 @@ if (length(summary_rows))
 if (length(bin_rows))
   write.csv(do.call(rbind, bin_rows), file.path(OUT, "diagram_bins.csv"), row.names = FALSE)
 cat(sprintf("zone_diagrams.R: %s — %d figure(s)\n", LABEL,
-            length(list.files(OUT, pattern = "^(reliability|roc)_.*png$"))))
+            length(list.files(OUT, pattern = "[.]png$", recursive = TRUE))))

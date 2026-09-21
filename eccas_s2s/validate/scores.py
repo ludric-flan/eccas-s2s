@@ -182,6 +182,55 @@ def roc_area(prob_event: xr.DataArray, event: xr.DataArray, year_dim: str = YEAR
     return da
 
 
+def groc(prob: xr.DataArray, obs_cat: xr.DataArray, year_dim: str = YEAR,
+         cat_dim: str = "category") -> xr.DataArray:
+    """
+    Generalised ROC (2AFC for ordered categories, Mason & Weigel 2009).
+
+    Every pair of years whose observed categories differ is presented to the
+    forecast: the score is the fraction of pairs where the forecast gives the
+    higher probability of the *wetter* (or warmer) outcome to the year that was
+    indeed the wetter one, half a point for a tie. 0.5 means no discrimination.
+
+    Unlike the per-category ROC area, one number covers the three categories at
+    once, which is what the reference chain reports for a zone; here it is
+    computed grid point by grid point.
+    """
+    def _groc(p, c):
+        out = np.full(p.shape[:-2], np.nan)
+        for idx in np.ndindex(p.shape[:-2]):
+            pi, ci = p[idx], c[idx]                    # (year, category), (year,)
+            ok = np.isfinite(ci) & np.isfinite(pi).all(axis=-1)
+            pi, ci = pi[ok], ci[ok]
+            n = ci.size
+            if n < 2:
+                continue
+            num = den = 0.0
+            for i in range(n - 1):
+                for j in range(i + 1, n):
+                    if ci[i] == ci[j]:
+                        continue
+                    den += 1
+                    lo, hi = (i, j) if ci[i] < ci[j] else (j, i)
+                    pk, pl = pi[lo], pi[hi]
+                    # P(the wetter year is ranked above the drier one)
+                    numer = sum(pk[s] * pl[s + 1:].sum() for s in range(pk.size - 1))
+                    denom = 1.0 - float((pk * pl).sum())
+                    f = 0.5 if denom <= 0 else numer / denom
+                    num += 1.0 if f > 0.5 else (0.5 if f == 0.5 else 0.0)
+            if den:
+                out[idx] = num / den
+        return out
+
+    da = xr.apply_ufunc(_groc, prob, obs_cat,
+                        input_core_dims=[[year_dim, cat_dim], [year_dim]],
+                        dask="parallelized", output_dtypes=[float])
+    da.name = "groc"
+    da.attrs = {"long_name": "generalised ROC area (2AFC, ordered categories)",
+                "reference": "Mason & Weigel 2009", "no_skill": 0.5}
+    return da
+
+
 def tercile_skill(prob: xr.DataArray, obs_cat: xr.DataArray, year_dim: str = YEAR,
                   cat_dim: str = "category") -> xr.Dataset:
     """RPS/RPSS plus, for each category, the Brier skill score and the ROC area."""
@@ -196,4 +245,5 @@ def tercile_skill(prob: xr.DataArray, obs_cat: xr.DataArray, year_dim: str = YEA
     ds["bss"] = xr.concat(bss, dim=xr.DataArray(cats, dims=cat_dim, name=cat_dim))
     ds["roc_area"] = xr.concat(roc, dim=xr.DataArray(cats, dims=cat_dim, name=cat_dim))
     ds["bss"].attrs["long_name"] = "Brier skill score vs climatology, per category"
+    ds["groc"] = groc(prob, obs_cat, year_dim, cat_dim)
     return ds

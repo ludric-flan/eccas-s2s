@@ -1,128 +1,124 @@
 """
 Skill maps of the raw hindcasts (workflow step E4, figures).
 
-Reads the score files written by :mod:`eccas_s2s.operations.skill_raw` and draws
-them in the CAPC-AC house style (CEEAC shapefile, logo, four-line title), with
-:mod:`eccas_s2s.viz.ceeac_maps`.
+Reads the score files written by :mod:`eccas_s2s.operations.skill_raw`
+(``netcdf/<system>_<model>/<scale>/<variable>/<metric>.nc``) and draws them in
+the CAPC-AC house style with :mod:`eccas_s2s.viz.ceeac_maps`.
 
-Two kinds of figure per model and variable:
+**One map per period**: a panel of six seasons is convenient for a developer but
+useless in a bulletin, where one period is discussed at a time. Each figure
+carries one metric and one period, an explicit French date (``Novembre 2026``,
+``OND 2026``, ``1ʳᵉ décade de Novembre 2026``), a vertical colour bar on the
+right, and under the map the sentence that tells the reader what counts as good
+skill for that metric.
 
-* one **panel per score**, with all the periods of a scale side by side
-  (``<system>_<model>_<variable>/<scale>_<score>.png``);
-* one **multi-model panel per score and period**, to compare the models at a
-  glance (``comparison/<variable>_<period>_<score>.png``).
+Only the cells of the CEEAC mask are drawn — exactly the cells on which the
+score was computed.
+
+Output::
+
+    figures/<system>_<model>/<scale>/<variable>/<metric>/<period>.png
+    figures/<system>_<model>/<scale>/<variable>/<metric>/<period>_<category>.png
 
 Example::
 
-    python scripts/run_plot_skill_raw.py --config config/cycle_202609.yaml --scores pearson rpss
+    python scripts/run_plot_skill_raw.py --config config/cycle_202609.yaml \\
+        --metrics pearson rpss roc_area groc
 """
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 import xarray as xr
 
-from eccas_s2s.operations.skill_raw import skill_dir, split_skill_name
+from eccas_s2s.operations.skill_raw import METRICS, score_paths, skill_dir
 from eccas_s2s.provenance import RunContext
 from eccas_s2s.settings import load_cycle
-from eccas_s2s.viz.ceeac_maps import SKILL_STYLES, map_panel
+from eccas_s2s.viz.ceeac_maps import map_score
 
-DEFAULT_SCORES = ("pearson", "rpss", "roc_area", "msess")
 VARIABLE_LABEL = {"precip": "Pluie", "t2m": "Température moyenne",
                   "tmax": "Température maximale", "tmin": "Température minimale"}
+CATEGORY_LABEL = {"BN": "catégorie déficitaire", "NN": "catégorie normale",
+                  "AN": "catégorie excédentaire"}
 
 
 def _model_label(cfg, system: str, model: str) -> str:
-    if system == "c3s":
+    if system == "c3s" and model in cfg.c3s_models:
         return cfg.c3s_models[model].label
     return cfg.raw["systems"]["nmme"]["models"].get(model, {}).get("label", model)
 
 
-def run(config: str, scores=DEFAULT_SCORES, scales=None, category: str = "AN",
-        comparison: bool = True) -> RunContext:
+def run(config: str, metrics=METRICS, scales=None, variables=None, models=None,
+        systems=("c3s", "nmme")) -> RunContext:
     cfg = load_cycle(config)
     root = skill_dir(cfg)
-    figures = root / "figures"
     shapefile = cfg.raw["paths"]["shapefile"]
     logo = cfg.raw["paths"].get("logo")
     extent = tuple(cfg.domains["domain"]["map_extent"])
-    scales = list(scales) if scales else cfg.scales
     init = cfg.init_date.date()
 
     with RunContext(cfg, step="plot_skill_raw") as ctx:
-        ctx.record_parameter("scores", list(scores))
-        ctx.record_parameter("scales", scales)
-        ctx.record_parameter("category", category)
-        files = sorted((root / "maps").glob("*_skill.nc"))
-        if not files:
-            raise FileNotFoundError(f"aucune carte de skill dans {root / 'maps'} "
+        ctx.record_parameter("metrics", list(metrics))
+        folders = sorted((root / "netcdf").glob("*/*/*"))
+        if not folders:
+            raise FileNotFoundError(f"aucun score dans {root / 'netcdf'} "
                                     "(lancer d'abord run_skill_raw.py)")
-        by_key: dict[tuple[str, str], list] = {}
-
-        for f in files:
-            system, model, variable = split_skill_name(f.stem)
-            ds = xr.open_dataset(f)
-            ctx.record_input(f, role="skill_maps")
+        for folder in folders:
+            system, model = folder.parent.parent.name.split("_", 1)
+            scale, variable = folder.parent.name, folder.name
+            if system not in systems or (models and model not in models):
+                continue
+            if (scales and scale not in scales) or (variables and variable not in variables):
+                continue
             label = _model_label(cfg, system, model)
-            for scale in scales:
-                sel = ds.sel(period=[p for p in ds["period"].values
-                                     if str(ds["scale"].sel(period=p).values) == scale])
-                if not sel.sizes.get("period"):
-                    continue
-                titles = [str(x) for x in sel["label"].values]
-                for score in scores:
-                    if score not in sel:
-                        continue
-                    field = sel[score]
-                    if "category" in field.dims:
-                        field = field.sel(category=category)
-                    style = SKILL_STYLES.get(score, {"cmap": "viridis", "levels": None,
-                                                     "label": score})
-                    name = f"{score} ({category})" if "category" in sel[score].dims else score
-                    out = figures / f"{system}_{model}_{variable}" / f"{scale}_{score}.png"
-                    map_panel([field.sel(period=p) for p in sel["period"].values], titles,
-                              shapefile=shapefile, logo=logo, extent=extent,
-                              cmap=style["cmap"], levels=style["levels"],
-                              cbar_label=style["label"], ncols=min(6, sel.sizes["period"]),
-                              suptitle=(f"{system.upper()} {label} — {VARIABLE_LABEL.get(variable, variable)}"
-                                        f"\nSkill brut ({name}), hindcast {ds.attrs.get('n_years', '')} ans"
-                                        f" — Initialisation : {init}"),
-                              output_path=out)
-                    ctx.record_output(out, role="skill_figure", system=system, model=model,
-                                      variable=variable, score=score, scale=scale)
-                    for p, title in zip(sel["period"].values, titles):
-                        by_key.setdefault((variable, str(p), score), []).append(
-                            (f"{label}", field.sel(period=p), title))
-            ds.close()
 
-        if comparison:
-            for (variable, period, score), items in by_key.items():
-                if len(items) < 2:
+            for metric in metrics:
+                f = folder / f"{metric}.nc"
+                if not f.exists():
                     continue
-                style = SKILL_STYLES.get(score, {"cmap": "viridis", "levels": None, "label": score})
-                out = figures / "comparison" / f"{variable}_{period}_{score}.png"
-                map_panel([f for _, f, _ in items], [m for m, _, _ in items],
-                          shapefile=shapefile, logo=logo, extent=extent, cmap=style["cmap"],
-                          levels=style["levels"], cbar_label=style["label"], ncols=4,
-                          suptitle=(f"{VARIABLE_LABEL.get(variable, variable)} — {items[0][2]}"
-                                    f"\n{score} brut, tous modèles — Initialisation : {init}"),
-                          output_path=out)
-                ctx.record_output(out, role="skill_comparison", variable=variable,
-                                  period=period, score=score)
-        ctx.log.info("%d figure(s) écrite(s) dans %s", len(ctx.outputs), figures)
+                with xr.open_dataset(f) as ds:
+                    da = ds[metric].load()
+                    attrs = dict(ds.attrs)
+                ctx.record_input(f, role="skill_netcdf")
+                out_dir = score_paths(root / "figures", system, model, variable, scale) / metric
+                cats = list(da["category"].values) if "category" in da.dims else [None]
+                for key in [str(k) for k in da["period"].values]:
+                    fr = str(da["label_fr"].sel(period=key).values)
+                    for cat in cats:
+                        field, name, extra = da.sel(period=key), key, ""
+                        if cat is not None:
+                            field = field.sel(category=cat)
+                            name = f"{key}_{cat}"
+                            extra = f" — {CATEGORY_LABEL.get(str(cat), cat)}"
+                        out = out_dir / f"{name}.png"
+                        map_score(
+                            field, metric=metric, variable=variable, shapefile=shapefile,
+                            logo=logo, extent=extent,
+                            title=f"{label} — {VARIABLE_LABEL.get(variable, variable)}{extra}",
+                            subtitle=(f"{fr}   |   initialisation {init}   |   hindcast "
+                                      f"{attrs.get('n_years', '?')} ans, validation croisée "
+                                      f"{attrs.get('cross_validation', 'LOYO')}"),
+                            output_path=out)
+                        ctx.record_output(out, role="skill_map", system=system, model=model,
+                                          variable=variable, scale=scale, metric=metric,
+                                          period=key)
+                ctx.log.info("%s %s %s %s %s : %d carte(s)", system, model, variable, scale,
+                             metric, da.sizes["period"] * len(cats))
+        ctx.log.info("%d figure(s) écrite(s) dans %s", len(ctx.outputs), root / "figures")
     return ctx
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", required=True)
-    ap.add_argument("--scores", nargs="+", default=list(DEFAULT_SCORES))
+    ap.add_argument("--metrics", nargs="+", default=list(METRICS))
     ap.add_argument("--scales", nargs="+", choices=["decade", "month", "season"])
-    ap.add_argument("--category", default="AN", choices=["BN", "NN", "AN"])
-    ap.add_argument("--no-comparison", action="store_true")
+    ap.add_argument("--variables", nargs="+", choices=["precip", "t2m", "tmax", "tmin"])
+    ap.add_argument("--models", nargs="+")
+    ap.add_argument("--systems", nargs="+", default=["c3s", "nmme"], choices=["c3s", "nmme"])
     args = ap.parse_args(argv)
-    run(args.config, args.scores, args.scales, args.category, not args.no_comparison)
+    run(args.config, args.metrics, args.scales, args.variables, args.models, args.systems)
 
 
 if __name__ == "__main__":

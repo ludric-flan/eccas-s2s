@@ -215,21 +215,181 @@ def map_panel(fields, titles, *, shapefile=None, logo=None, extent=DEFAULT_EXTEN
 
 
 #: colour scales of the skill maps (phase P2).
+#
+# Every skill metric uses the same reading grid: **grey below the no-skill
+# value, green above it**, so that a glance separates "the model brings
+# something here" from "it does not", whatever the metric. The greys are
+# deliberately flat (no gradient of failure), the greens graded, and the
+# no-skill value always falls on a class boundary.
+NO_SKILL_COLORS = ["#c7c7c7", "#adadad", "#8f8f8f"]
+SKILL_COLORS = ["#ffffcc", "#d9f0a3", "#addd8e", "#78c679", "#41ab5d", "#006837"]
+_SKILL_CMAP = NO_SKILL_COLORS + SKILL_COLORS
+
+#: symmetric diverging scale for a bias (too wet / too dry, too warm / too cold).
+BIAS_CMAP = {"precip": "BrBG", "t2m": "RdBu_r", "tmax": "RdBu_r", "tmin": "RdBu_r"}
+
 SKILL_STYLES = {
-    "pearson": dict(cmap="RdYlBu_r", levels=[-1, -0.6, -0.4, -0.2, 0, 0.2, 0.4, 0.6, 0.8, 1],
-                    label="corrélation"),
-    "spearman": dict(cmap="RdYlBu_r", levels=[-1, -0.6, -0.4, -0.2, 0, 0.2, 0.4, 0.6, 0.8, 1],
-                     label="corrélation de rang"),
-    "acc": dict(cmap="RdYlBu_r", levels=[-1, -0.6, -0.4, -0.2, 0, 0.2, 0.4, 0.6, 0.8, 1],
-                label="ACC"),
-    "rpss": dict(cmap="RdYlGn", levels=[-0.5, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.5],
-                 label="RPSS"),
-    "msess": dict(cmap="RdYlGn", levels=[-1, -0.6, -0.4, -0.2, 0, 0.1, 0.2, 0.3, 0.5],
-                  label="MSESS"),
-    "roc_area": dict(cmap="RdYlGn", levels=[0.2, 0.35, 0.45, 0.5, 0.55, 0.65, 0.75, 0.85, 1.0],
-                     label="aire ROC"),
-    "bss": dict(cmap="RdYlGn", levels=[-0.5, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.5],
-                label="BSS"),
-    "bias": dict(cmap="BrBG", levels=None, label="biais"),
-    "rmse": dict(cmap="YlOrRd", levels=None, label="RMSE"),
+    "pearson": dict(colors=_SKILL_CMAP,
+                    levels=[-1, -0.4, -0.2, 0, 0.1, 0.2, 0.3, 0.4, 0.6, 1],
+                    label="corrélation de Pearson", no_skill=0.0,
+                    caption="Corrélation > 0 : le modèle suit le sens des variations observées. "
+                            "Au-delà de 0,40 elle est significative à 5 % sur 24 années ; "
+                            "en dessous de 0 (gris) le modèle n'apporte rien."),
+    "spearman": dict(colors=_SKILL_CMAP,
+                     levels=[-1, -0.4, -0.2, 0, 0.1, 0.2, 0.3, 0.4, 0.6, 1],
+                     label="corrélation de rang (Spearman)", no_skill=0.0,
+                     caption="Même lecture que la corrélation de Pearson, mais sur les rangs : "
+                             "insensible aux valeurs extrêmes. > 0 utile, gris = sans skill."),
+    "acc": dict(colors=_SKILL_CMAP,
+                levels=[-1, -0.4, -0.2, 0, 0.1, 0.2, 0.3, 0.4, 0.6, 1],
+                label="ACC (corrélation d'anomalies)", no_skill=0.0,
+                caption="ACC > 0 : les anomalies prévues vont dans le sens des anomalies "
+                        "observées ; > 0,40 : lien net. Gris = sans skill."),
+    "msess": dict(colors=_SKILL_CMAP,
+                  levels=[-1, -0.3, -0.1, 0, 0.05, 0.1, 0.2, 0.3, 0.5, 1],
+                  label="MSESS", no_skill=0.0,
+                  caption="MSESS > 0 : l'erreur quadratique du modèle est plus faible que celle "
+                          "de la climatologie. Gris : la moyenne climatologique fait mieux que "
+                          "le modèle brut — c'est fréquent tant que le biais n'est pas corrigé."),
+    "rpss": dict(colors=_SKILL_CMAP,
+                 levels=[-1, -0.3, -0.1, 0, 0.05, 0.1, 0.2, 0.3, 0.5, 1],
+                 label="RPSS", no_skill=0.0,
+                 caption="RPSS > 0 : les probabilités des trois catégories valent mieux que la "
+                         "prévision climatologique (1/3, 1/3, 1/3). Gris = sans skill "
+                         "probabiliste."),
+    "bss": dict(colors=_SKILL_CMAP,
+                levels=[-1, -0.3, -0.1, 0, 0.05, 0.1, 0.2, 0.3, 0.5, 1],
+                label="BSS (score de Brier réduit)", no_skill=0.0,
+                caption="BSS > 0 : pour cette catégorie, la probabilité prévue bat la "
+                        "climatologie. Gris = sans skill."),
+    "roc_area": dict(colors=_SKILL_CMAP,
+                     levels=[0, 0.3, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.8, 1],
+                     label="aire sous la courbe ROC", no_skill=0.5,
+                     caption="AUC > 0,5 : le modèle sépare les années où la catégorie survient "
+                             "de celles où elle ne survient pas ; > 0,70 : discrimination "
+                             "utile pour l'alerte. Gris (≤ 0,5) : aucune discrimination."),
+    "groc": dict(colors=_SKILL_CMAP,
+                 levels=[0, 0.3, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.8, 1],
+                 label="GROC (ROC généralisé, 3 catégories)", no_skill=0.5,
+                 caption="GROC > 0,5 : sur une paire d'années de catégories différentes, le "
+                         "modèle classe le plus souvent la bonne année devant l'autre ; "
+                         "> 0,70 : discrimination utile. Gris (≤ 0,5) : aucune."),
+    "bias": dict(cmap="BrBG", levels=None, label="biais", no_skill=0.0, symmetric=True,
+                 caption="Biais du modèle brut : proche de 0 = pas de dérive systématique. "
+                         "Positif = modèle trop humide (ou trop chaud), négatif = trop sec "
+                         "(ou trop froid). C'est ce que la calibration (P3) corrige en premier."),
+    "rmse": dict(cmap="YlOrRd", levels=None, label="RMSE", no_skill=None,
+                 caption="Erreur quadratique moyenne, dans l'unité de la variable : plus elle "
+                         "est faible, mieux c'est. Pour savoir si elle est bonne, la comparer "
+                         "à la climatologie : c'est ce que fait le MSESS."),
+    "mae": dict(cmap="YlOrRd", levels=None, label="MAE", no_skill=None,
+                caption="Erreur absolue moyenne, dans l'unité de la variable : plus faible = "
+                        "meilleur."),
 }
+
+
+#: unit of the variable, appended to the colour bar of the dimensional metrics.
+UNITS = {"precip": "mm", "t2m": "°C", "tmax": "°C", "tmin": "°C"}
+DIMENSIONAL = ("bias", "rmse", "mae", "rmse_clim")
+
+
+def style_of(metric: str, variable: str = "precip") -> dict:
+    """Colour scale and caption of a metric, adapted to the variable."""
+    style = dict(SKILL_STYLES.get(metric, {"cmap": "viridis", "levels": None,
+                                           "label": metric, "caption": ""}))
+    if metric in DIMENSIONAL and variable in UNITS:
+        style["label"] = f"{style.get('label', metric)} ({UNITS[variable]})"
+    if metric == "bias":
+        style["cmap"] = BIAS_CMAP.get(variable, "BrBG")
+        if variable != "precip":
+            style["caption"] = style["caption"].replace("trop humide (ou trop chaud)",
+                                                        "trop chaud")
+            style["caption"] = style["caption"].replace("trop sec\n(ou trop froid)", "trop froid")
+    return style
+
+
+def _discrete(style: dict, field):
+    """Colour map and norm of a metric: fixed classes, or a scale fitted to the field."""
+    from matplotlib.colors import BoundaryNorm, ListedColormap, TwoSlopeNorm
+
+    if style.get("colors") and style.get("levels"):
+        cmap = ListedColormap(style["colors"])
+        return cmap, BoundaryNorm(style["levels"], cmap.N, extend="neither"), "neither"
+    values = np.asarray(field.values, dtype=float)
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return plt.get_cmap(style.get("cmap", "viridis")), None, "neither"
+    if style.get("symmetric"):
+        bound = float(np.nanpercentile(np.abs(finite), 98)) or 1.0
+        return plt.get_cmap(style["cmap"]), TwoSlopeNorm(0.0, -bound, bound), "both"
+    lo, hi = np.nanpercentile(finite, [2, 98])
+    return plt.get_cmap(style["cmap"]), BoundaryNorm(np.linspace(lo, hi, 11),
+                                                     256, extend="both"), "both"
+
+
+def map_score(field, *, metric: str, variable: str = "precip", shapefile=None, logo=None,
+              extent=DEFAULT_EXTENT, title="", subtitle="", caption=None, output_path=None,
+              map_width: float = 5.4):
+    """
+    One metric, one period, one map in the CAPC-AC house style.
+
+    Vertical colour bar on the right, latitudes on the left only, and under the
+    map the sentence that says what "good" means for this metric — a map of ROC
+    areas is unreadable for a user who does not know that 0,5 is the no-skill
+    value.
+
+    The figure is sized from the domain so the map fills its axes: a fixed
+    figure size leaves a wide empty band on either side of a domain that is
+    taller than it is wide, as the CEEAC is.
+    """
+    import cartopy.crs as ccrs
+
+    style = style_of(metric, variable)
+    cmap, norm, extend = _discrete(style, field)
+
+    # inches: the axes box follows the aspect of the domain, the margins hold
+    # the title, the caption and the colour bar.
+    lon_span, lat_span = extent[1] - extent[0], extent[3] - extent[2]
+    ax_w = float(map_width)
+    ax_h = ax_w * lat_span / lon_span
+    left, right, head, foot = 0.75, 1.70, 1.20, 1.05
+    fig_w, fig_h = left + ax_w + right, head + ax_h + foot
+    fig = plt.figure(figsize=(fig_w, fig_h))
+    ax = fig.add_axes([left / fig_w, foot / fig_h, ax_w / fig_w, ax_h / fig_h],
+                      projection=ccrs.PlateCarree())
+    setup_ax(ax, extent, shapefile, left_labels=True, right_labels=False, bottom_labels=True)
+    mesh = ax.pcolormesh(field["longitude"], field["latitude"], field.values, cmap=cmap,
+                         norm=norm, shading="nearest", transform=ccrs.PlateCarree())
+
+    centre = (left + ax_w / 2) / fig_w
+    if title:
+        fig.text(centre, 1 - 0.30 / fig_h, title, ha="center", va="top",
+                 fontsize=12.5, fontweight="bold")
+    if subtitle:
+        fig.text(centre, 1 - 0.68 / fig_h, _wrap(subtitle, 78), ha="center", va="top",
+                 fontsize=9.5, color="#333333")
+
+    cax = fig.add_axes([(left + ax_w + 0.22) / fig_w, (foot + 0.05 * ax_h) / fig_h,
+                        0.22 / fig_w, 0.90 * ax_h / fig_h])
+    cbar = fig.colorbar(mesh, cax=cax, orientation="vertical", extend=extend,
+                        ticks=style.get("levels"))
+    cbar.set_label(style.get("label", metric), fontsize=10)
+    cbar.ax.tick_params(labelsize=9)
+
+    text = style.get("caption", "") if caption is None else caption
+    if text:
+        fig.text(centre, (foot - 0.40) / fig_h, _wrap(text, 92), ha="center", va="top",
+                 fontsize=8.8, style="italic", color="#333333")
+    add_figure_logo(fig, logo, width=0.9 / fig_w, height=0.5 / fig_h)
+    if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_path, dpi=DPI, facecolor="white")
+        plt.close(fig)
+        return Path(output_path)
+    return fig
+
+
+def _wrap(text: str, width: int) -> str:
+    import textwrap
+
+    return "\n".join(textwrap.wrap(text, width))
