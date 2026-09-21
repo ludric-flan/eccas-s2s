@@ -98,7 +98,11 @@ Deux familles :
 | `pedagogiques/02_cumuls_c3s.ipynb` | pédagogique | cumuls C3S par période, biais de moyenne et de variabilité des modèles bruts |
 | `operationnels/OP_01_telechargement_qc_c3s.ipynb` | opérationnel | téléchargement C3S + contrôle qualité + horizon commun |
 | `operationnels/OP_02_reference_chirps.ipynb` | opérationnel | archive CHIRPS + normales (idempotent) |
+| `pedagogiques/03_temperature_nmme.ipynb` | pédagogique | référence ERA5, percentiles extrêmes par maille, biais de température des modèles, NMME |
 | `operationnels/OP_03_cumuls_c3s.ipynb` | opérationnel | cumuls C3S par période |
+| `operationnels/OP_04_reference_temperature_era5.ipynb` | opérationnel | téléchargement ERA5 horaire → journalier, archive et normales |
+| `operationnels/OP_05_temperatures_c3s.ipynb` | opérationnel | téléchargement et périodes de T2m, Tmax, Tmin |
+| `operationnels/OP_06_nmme.ipynb` | opérationnel | téléchargement NMME et valeurs par mois et saison |
 
 ## Git
 
