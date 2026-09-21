@@ -54,9 +54,12 @@ observations:
       - /home/ludric/Downloads/SVM/Previsions_S2S/DATA_OSF/raw/chirps/daily_p05/chirps-v2.0.*.days_p05_ECCAS.nc
       - /home/ludric/Desktop/Donnees_calibration_c3s/DATA/CHIRPS/TP_CHIRPS_v2.0_DAILY_1991_2025_p05_ECCAS.nc
   temperature:
-    source: ERA5-Land
-    resolution_deg: 0.1
-    daily_path: null          # à télécharger en phase P1
+    # T2m moyenne, maximum et minimum journaliers calculés à partir de la T2m
+    # horaire ERA5 (jours UTC), voir operations/download_era5_hourly.py.
+    source: ERA5
+    resolution_deg: 0.25
+    daily_paths:
+      - /home/ludric/Downloads/SVM/Previsions_S2S/DATA_OSF/raw/era5/hourly_0p25/era5_t2m_daily_*.nc
 
 systems:
   c3s:

@@ -45,19 +45,33 @@ def _key_dates(key: str, year: int) -> list[pd.Timestamp]:
     return [pd.Timestamp(*_shift_month(year, month, k), 1) for k in range(3)]
 
 
-def total_for_key(dekads: xr.DataArray, months: xr.DataArray, key: str, year: int) -> xr.DataArray:
-    """Observed total of a calendar period starting in ``year`` (NaN if not in the archive)."""
+def total_for_key(dekads: xr.DataArray, months: xr.DataArray, key: str, year: int,
+                  how: str = "sum") -> xr.DataArray:
+    """
+    Observed value of a calendar period starting in ``year`` (NaN if not in the archive).
+
+    ``how="sum"`` for totals (precipitation) and ``how="mean"`` for means
+    (temperature); a seasonal mean is weighted by the number of days of its
+    three months.
+    """
     source = dekads if key.startswith("dekad") else months
     stamps = _key_dates(key, year)
     available = pd.DatetimeIndex(source["time"].values)
     if not all(t in available for t in stamps):
         return xr.full_like(source.isel(time=0, drop=True), np.nan)
-    sel = source.sel(time=stamps)
-    return sel.sum("time", skipna=False).drop_vars("dekad", errors="ignore")
+    sel = source.sel(time=stamps).drop_vars("dekad", errors="ignore")
+    if how == "sum":
+        return sel.sum("time", skipna=False)
+    if how != "mean":
+        raise ValueError("how doit valoir 'sum' ou 'mean'")
+    if len(stamps) == 1:
+        return sel.isel(time=0, drop=True)
+    w = xr.DataArray([t.days_in_month for t in stamps], dims="time", coords={"time": sel["time"]})
+    return (sel * w).sum("time", skipna=False) / w.sum()
 
 
 def obs_period_totals(dekads: xr.DataArray, months: xr.DataArray,
-                      periods: list[Period], years) -> xr.DataArray:
+                      periods: list[Period], years, how: str = "sum") -> xr.DataArray:
     """
     Observed totals of the cycle's periods for each initialisation year.
 
@@ -71,20 +85,20 @@ def obs_period_totals(dekads: xr.DataArray, months: xr.DataArray,
         per_year = []
         for y in years:
             start = p.dates(int(y))[0]
-            per_year.append(total_for_key(dekads, months, p.calendar_key, start.year))
+            per_year.append(total_for_key(dekads, months, p.calendar_key, start.year, how))
         per_period.append(xr.concat(per_year, dim=pd.Index(list(years), name="year")))
     out = xr.concat(per_period, dim=pd.Index([p.key for p in periods], name="period"))
     out = out.assign_coords(
         scale=("period", [p.scale for p in periods]),
         calendar_key=("period", [p.calendar_key for p in periods]))
-    out.name = "precip"
-    out.attrs = {"units": "mm", "long_name": "observed period total precipitation"}
+    out.name = dekads.name or "obs"
+    out.attrs = {**dekads.attrs, "aggregation": how}
     return out.transpose("year", "period", "latitude", "longitude")
 
 
 def normals(dekads: xr.DataArray, months: xr.DataArray, years: tuple[int, int],
             percentiles, method: str = "weibull", min_years: int = 25,
-            keys: list[str] | None = None, progress=None) -> xr.Dataset:
+            keys: list[str] | None = None, progress=None, how: str = "sum") -> xr.Dataset:
     """
     Observed normals per grid point and calendar period.
 
@@ -100,7 +114,7 @@ def normals(dekads: xr.DataArray, months: xr.DataArray, years: tuple[int, int],
     for key in keys:
         if progress:
             progress(key)
-        sample = xr.concat([total_for_key(dekads, months, key, y) for y in range(y0, y1 + 1)],
+        sample = xr.concat([total_for_key(dekads, months, key, y, how) for y in range(y0, y1 + 1)],
                            dim="year").load()
         n = sample.notnull().sum("year")
         ok = n >= min_years
@@ -121,11 +135,12 @@ def normals(dekads: xr.DataArray, months: xr.DataArray, years: tuple[int, int],
         "n_years": xr.concat(counts, dim=idx).astype("int16"),
         "quantile": xr.concat(quants, dim=idx).transpose("percentile", "calendar_key", ...),
     })
+    units = dekads.attrs.get("units", "mm")
     for v in ("mean", "std", "quantile"):
         ds[v] = ds[v].astype("float32")
-        ds[v].attrs["units"] = "mm"
+        ds[v].attrs["units"] = units
     ds.attrs.update({"normal_period": f"{y0}-{y1}", "percentile_method": method,
-                     "min_years": min_years})
+                     "min_years": min_years, "aggregation": how})
     return ds
 
 

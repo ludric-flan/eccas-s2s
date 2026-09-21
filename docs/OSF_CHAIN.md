@@ -23,6 +23,11 @@ pytest -q                 # tous les tests doivent passer
 | E2 · contrôle qualité C3S | `python scripts/run_qc_c3s.py --config config/cycle_202609.yaml --variable precip` | P0 |
 | E1 · référence CHIRPS (archive + normales, seulement si CHIRPS a changé) | `python scripts/run_obs_chirps.py --config config/cycle_202609.yaml` | P1 |
 | E2 · cumuls C3S par période | `python scripts/run_c3s_totals.py --config config/cycle_202609.yaml` | P1 |
+| E2 · températures C3S par période | `python scripts/run_c3s_temperature.py --config config/cycle_202609.yaml` | P1 |
+| E1 · CHIRPS 1981–1990 (une fois) | `python scripts/run_download_chirps.py --config ... --years 1981 1990` | P1 |
+| E1 · température observée ERA5 (horaire → journalier) | `python scripts/run_download_era5_hourly.py --config ... --years 1981 2026 --workers 4` | P1 |
+| E1 · référence ERA5 (archive + normales) | `python scripts/run_obs_era5.py --config config/cycle_202609.yaml` | P1 |
+| E2 · NMME (téléchargement puis périodes) | `python scripts/run_download_nmme.py --config ...` puis `run_nmme_totals.py` | P1 |
 | … | (ajoutés au fil des phases) | |
 
 Chaque étape existe aussi en notebook opérationnel (voir plus bas). Scripts et notebooks appellent la même fonction `run(...)` de `eccas_s2s/operations/`.
@@ -35,6 +40,8 @@ Tester une requête sans télécharger : ajouter `--dry-run`.
 |---|---|
 | Données brutes immuables | `DATA_OSF/raw/<système>/<YYYYMM>/` |
 | Référence CHIRPS dérivée (partagée par tous les cycles) | `DATA_OSF/derived/obs/chirps/` |
+| Référence température ERA5 dérivée | `DATA_OSF/derived/obs/era5/` |
+| Valeurs NMME par période | `DATA_OSF/derived/nmme/<YYYYMM>/` |
 | Cumuls C3S par période | `DATA_OSF/derived/c3s/<YYYYMM>/` |
 | Journaux et manifestes d'exécution | `OUTPUTS_OSF/runs/<run_id>/{run.log, manifest.json}` |
 | Prévisions émises (archive) | `ARCHIVE_OSF/<YYYY>/<MM>/<run_id>/` |
@@ -52,7 +59,11 @@ Tester une requête sans télécharger : ajouter `--dry-run`.
 | `eccas_s2s.io.c3s_qc` | contrôle qualité des fichiers bruts : membres, années, horizon reçu, échéances manquantes |
 | `eccas_s2s.obs.chirps` | lecture CHIRPS, contrôle qualité et cumuls décadaires/mensuels en une passe mois par mois |
 | `eccas_s2s.obs.climatology` | cumuls observés des périodes d'un cycle, normales 1991–2020 par maille et par période calendaire |
-| `eccas_s2s.obs.regrid` | moyenne par blocs exacte 0,05° → 1° (emboîtement vérifié), sélection des mailles modèle |
+| `eccas_s2s.obs.regrid` | moyenne par blocs exacte 0,05° → 1° (grilles emboîtées) ; remaillage conservatif 0,25° → 1° (grilles non emboîtées) |
+| `eccas_s2s.obs.era5` | lecture ERA5 journalier, contrôle qualité, moyennes décadaires et mensuelles |
+| `eccas_s2s.io.nmme_cpc` | fichiers NMME du serveur NOAA/CPC (moyenne d'ensemble) |
+| `eccas_s2s.core.monthly` | agrégation mois et saisons depuis des données mensuelles |
+| `eccas_s2s.products.masks` | masque de saison sèche (méthodes `relative` et `absolute`) |
 | `eccas_s2s.viz.maps` | panneaux de cartes CEEAC |
 | `eccas_s2s.operations.*` | étapes opérationnelles (`run(...)` + `main(argv)`) : `download_c3s`, `qc_c3s`, `obs_chirps`, `c3s_totals` |
 
@@ -68,6 +79,9 @@ Les modules historiques (`eccas_s2s.config`, `core.processing`, `pipeline`) sont
 - **Ensembles UKMO et BoM :** fichiers bruts conservés tels que téléchargés, traités avec les membres disponibles au 1er du mois (2–11 membres) ; le contrôle qualité le signale.
 - **Normales observées :** 1991–2020, par maille et par période calendaire (`dekad_MM_D`, `month_MM`, `season_MM`), percentiles estimés par la position de Weibull ; communes à tous les modèles (D12).
 - **Grilles :** CHIRPS 0,05° et C3S 1° sont emboîtées (20 × 20) : passage à 1° par moyenne par blocs exacte. Coordonnées CHIRPS recalées (stockées en simple précision).
+- **Température :** observation = T2m horaire ERA5 (0,25°) agrégée en moyenne, maximum et minimum journaliers UTC ; modèles = Tmax/Tmin quotidiens C3S et T2m des **statistiques mensuelles** C3S (mois et saisons seulement).
+- **NMME :** moyenne d'ensemble seulement (pas de membres), mensuel, donc mois et saisons ; 6 modèles depuis 1982 ou 1991.
+- **Hindcasts C3S :** demandés avec un jour d'échéance de plus, pour couvrir le 29 février des années bissextiles.
 - **Horizon :** `max_lead_days` = horizon **reçu** (DWD 181 j, Météo-France 212 j pour l'init. 09) ; le contrôle qualité signale tout écart avec la configuration.
 
 ## Notebooks

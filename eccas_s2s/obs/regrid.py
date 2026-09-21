@@ -74,3 +74,51 @@ def match_model_grid(model: xr.DataArray, obs_coarse: xr.DataArray) -> xr.DataAr
                     method="nearest", tolerance=1e-3)
     return sel.assign_coords(latitude=obs_coarse["latitude"].values,
                              longitude=obs_coarse["longitude"].values)
+
+
+def conservative_to_degree(da, target_res: float = 1.0, target_offset: float = 0.5,
+                           na_thres: float = 0.5):
+    """
+    Conservative remapping of a regular lat/lon field onto a coarser grid.
+
+    Used when the grids are **not** nested (ERA5 0.25° cells centred on integer
+    degrees vs the C3S 1° cells centred on half degrees): each target cell value
+    is the area-weighted mean of the source cells it overlaps. ``target_offset``
+    is the offset of the target cell centres (0.5 for the C3S grid). A target
+    cell with more than ``na_thres`` of missing area is NaN.
+
+    Nested grids (CHIRPS 0.05° → 1°) should use :func:`block_average`, which is
+    exact and needs no weights.
+    """
+    import xesmf as xe
+
+    src_res_lat = abs(_resolution(da["latitude"].values))
+    src_res_lon = abs(_resolution(da["longitude"].values))
+    lat, lon = np.sort(da["latitude"].values.astype("float64")), np.sort(da["longitude"].values.astype("float64"))
+    src = xr.Dataset(coords={
+        "lat": lat, "lon": lon,
+        "lat_b": np.append(lat - src_res_lat / 2, lat[-1] + src_res_lat / 2),
+        "lon_b": np.append(lon - src_res_lon / 2, lon[-1] + src_res_lon / 2)})
+
+    def _centres(v0, v1):
+        first = np.floor(v0 / target_res) * target_res + target_offset * target_res
+        if first - target_res / 2 < v0 - 1e-9:
+            first += target_res
+        n = int(np.floor((v1 + 1e-9 - (first - target_res / 2)) / target_res))
+        return first + target_res * np.arange(max(n, 0))
+
+    tlat = _centres(lat[0] - src_res_lat / 2, lat[-1] + src_res_lat / 2)
+    tlon = _centres(lon[0] - src_res_lon / 2, lon[-1] + src_res_lon / 2)
+    if not len(tlat) or not len(tlon):
+        raise ValueError("aucune maille cible entièrement couverte par la grille source")
+    tgt = xr.Dataset(coords={
+        "lat": tlat, "lon": tlon,
+        "lat_b": np.append(tlat - target_res / 2, tlat[-1] + target_res / 2),
+        "lon_b": np.append(tlon - target_res / 2, tlon[-1] + target_res / 2)})
+
+    renamed = da.rename({"latitude": "lat", "longitude": "lon"}).sortby(["lat", "lon"])
+    regridder = xe.Regridder(src, tgt, "conservative")
+    out = regridder(renamed, skipna=True, na_thres=na_thres)
+    out = out.rename({"lat": "latitude", "lon": "longitude"})
+    out.attrs = {**da.attrs, "regridding": f"conservative to {target_res} deg (xESMF, na_thres={na_thres})"}
+    return out
