@@ -40,6 +40,9 @@ VARIABLE_LABEL = {"precip": "Rainfall", "t2m": "Température moyenne",
                   "tmax": "Température maximale", "tmin": "Température minimale"}
 #: category names in the wording of the regional bulletins (RCC).
 CATEGORY_LABEL = {"BN": "Below Normal", "NN": "Near Normal", "AN": "Above Normal"}
+#: the scores of this step are those of the *raw* hindcast; the prefix says so on
+#: every figure, so a map cannot be confused with its calibrated counterpart (P3).
+KIND = "Raw"
 
 
 def _model_label(cfg, system: str, model: str) -> str:
@@ -98,7 +101,7 @@ def run(config: str, metrics=METRICS, scales=None, variables=None, models=None,
                             field, metric=metric, variable=variable, shapefile=shapefile,
                             logo=logo, extent=extent,
                             title=(f"{label} — {VARIABLE_LABEL.get(variable, variable)}{extra}"
-                                   f" — {metric_title(metric)}\n{fr}"),
+                                   f" — {KIND} {metric_title(metric)}\n{fr}"),
                             subtitle=f"Init : {init}   |   Hindcast Period : {hind}",
                             output_path=out)
                         ctx.record_output(out, role="skill_map", system=system, model=model,

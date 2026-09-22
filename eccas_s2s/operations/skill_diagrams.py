@@ -43,6 +43,8 @@ from eccas_s2s.validate.pooled import MAX_PIXELS, pooled_frame
 from eccas_s2s.validate.r_bridge import RNotAvailable, check_packages, run_zone_diagrams
 
 N_BOOT = 300
+#: these diagrams describe the *raw* hindcast; the word opens their titles.
+KIND = "Raw"
 VARIABLE_LABEL = {"precip": "Rainfall", "t2m": "Température moyenne",
                   "tmax": "Température maximale", "tmin": "Température minimale"}
 
@@ -98,7 +100,8 @@ def run(config: str, systems=("c3s",), variables=("precip",), models=None, scale
                                  f" — Init : {cfg.init_date.date()} | Hindcast Period : "
                                  f"{pairs.attrs.get('years', '')}")
                         try:
-                            figures = run_zone_diagrams(frame, zdir, label, n_boot=n_boot)
+                            figures = run_zone_diagrams(frame, zdir, label, n_boot=n_boot,
+                                                       kind=KIND)
                         except RNotAvailable as exc:
                             ctx.warn(f"diagrammes {system} {model} {variable} {scale} : {exc}")
                             continue

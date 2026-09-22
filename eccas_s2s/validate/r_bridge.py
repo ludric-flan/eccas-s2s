@@ -89,12 +89,14 @@ def pairs_to_frame(index: xr.Dataset) -> pd.DataFrame:
 
 
 def run_zone_diagrams(frame: pd.DataFrame, out_dir: str | Path, label: str,
-                      n_boot: int = 200, rscript: str | None = None) -> list[Path]:
+                      n_boot: int = 200, kind: str = "Raw",
+                      rscript: str | None = None) -> list[Path]:
     """
     Draw the reliability and ROC diagrams of a zone with R.
 
     Two figures per period: the attributes/reliability diagram and the ROC
     diagram, each carrying the three tercile categories on the same axes.
+    ``kind`` opens their titles ("Raw" here, "Calibrated" from phase P3 on).
 
     ``frame`` holds the **pooled grid-point pairs** of the zone
     (:func:`eccas_s2s.validate.pooled.pooled_frame`); a frame without
@@ -107,7 +109,7 @@ def run_zone_diagrams(frame: pd.DataFrame, out_dir: str | Path, label: str,
     pooled_csv = out_dir / "pooled_pairs.csv"
     frame.to_csv(pooled_csv, index=False)
     res = subprocess.run([path, str(R_DIAGRAMS), str(pooled_csv), str(out_dir), label,
-                          str(int(n_boot))], capture_output=True, text=True, timeout=7200)
+                          str(int(n_boot)), kind], capture_output=True, text=True, timeout=7200)
     if res.returncode != 0:
         raise RNotAvailable(f"zone_diagrams.R a échoué ({label}) :\n{res.stderr[-800:]}")
     return sorted(out_dir.glob("*/*.png"))

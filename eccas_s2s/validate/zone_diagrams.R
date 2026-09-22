@@ -26,7 +26,7 @@
 #
 # Input columns : period (key, used for the file name), period_label (French label
 # for the title), year, cell, obs_cat, pBN, pNN, pAN
-# Usage: Rscript zone_diagrams.R <pooled_pairs.csv> <out_dir> <label> [n_boot]
+# Usage: Rscript zone_diagrams.R <pooled_pairs.csv> <out_dir> <label> [n_boot] [kind]
 # =============================================================================
 
 suppressPackageStartupMessages(library(verification))
@@ -38,6 +38,9 @@ if (length(args) < 3) {
 }
 PAIRS <- args[1]; OUT <- args[2]; LABEL <- args[3]
 N_BOOT <- if (length(args) > 3) as.integer(args[4]) else 200
+# "Raw" for the uncalibrated hindcast, "Calibrated" from phase P3 on: the word
+# belongs in the title, not only in the folder name.
+KIND <- if (length(args) > 4) args[5] else "Raw"
 dir.create(file.path(OUT, "reliability"), recursive = TRUE, showWarnings = FALSE)
 dir.create(file.path(OUT, "roc"), recursive = TRUE, showWarnings = FALSE)
 
@@ -280,14 +283,14 @@ for (per in unique(pairs$period)) {
   rel_figure(tabs, "")
   par(mar = c(4.2, 4.4, 2.2, 1.4))
   sharp_panel(tabs)
-  mtext("Diagramme de fiabilité (attributs) — terciles", outer = TRUE, font = 2,
-        cex = 1.0, line = 1.2)
+  mtext(sprintf("%s — Diagramme de fiabilité (attributs), terciles", KIND), outer = TRUE,
+        font = 2, cex = 1.0, line = 1.2)
   mtext(sub, outer = TRUE, cex = 0.85, line = 0.0)
   layout(1); par(op); dev.off()
 
   png_open(file.path(OUT, "roc", sprintf("%s.png", per)), w = 1100, h = 1100)
   op <- par(mar = c(4.2, 4.2, 4.0, 1.0))
-  roc_figure(rocs, envs, areas, "Diagramme ROC — terciles")
+  roc_figure(rocs, envs, areas, sprintf("%s — Diagramme ROC, terciles", KIND))
   mtext(sub, side = 3, line = 0.4, cex = 0.85)
   par(op); dev.off()
 }
