@@ -87,8 +87,15 @@ def split_skill_name(name: str) -> tuple[str, str, str]:
     return system, model, variable
 
 
-def skill_dir(cfg) -> Path:
-    return cfg.output_root / "skill" / cfg.cycle_id / "raw"
+def skill_dir(cfg, kind: str = "raw") -> Path:
+    """
+    Where the scores of a family of forecasts live.
+
+    ``kind`` is ``raw`` for the hindcasts as delivered (phase P2) and
+    ``calibrated`` for the output of phase P3: the two trees have the same shape,
+    which is what lets the same maps and diagrams describe both.
+    """
+    return cfg.output_root / "skill" / cfg.cycle_id / kind
 
 
 def _cached_integer_grid_archive(cfg, variable: str, ctx=None) -> xr.Dataset:
@@ -108,7 +115,7 @@ def _cached_integer_grid_archive(cfg, variable: str, ctx=None) -> xr.Dataset:
     if ctx:
         ctx.log.info("    construction du cache observation sur la grille NMME (%s)", variable)
     if variable == "precip":
-        _, months = obs_chirps.load_archives(cfg, "p05")
+        _, months = obs_chirps.load_archives(cfg)
         da = months
     else:
         _, months = obs_era5.load_archives(cfg, "0p25")

@@ -48,12 +48,11 @@ observations:
   precip:
     source: CHIRPS
     version: "2.0"
-    resolution_deg: 0.05
-    # Fichiers quotidiens (chemins ou motifs) : 1981–1990 téléchargés par
-    # run_download_chirps.py, 1991–2025 fichier CEEAC existant.
+    # CHIRPS est pris dans son produit 0.25° (p25), la résolution à laquelle
+    # travaille la calibration (P3) : pas d'agrégation intermédiaire à justifier.
+    resolution_deg: 0.25
     daily_paths:
-      - /home/ludric/Downloads/SVM/Previsions_S2S/DATA_OSF/raw/chirps/daily_p05/chirps-v2.0.*.days_p05_ECCAS.nc
-      - /home/ludric/Desktop/Donnees_calibration_c3s/DATA/CHIRPS/TP_CHIRPS_v2.0_DAILY_1991_2025_p05_ECCAS.nc
+      - /home/ludric/Downloads/SVM/Previsions_S2S/DATA_OSF/raw/chirps/daily_p25/chirps-v2.0.*.days_p25_ECCAS.nc
   temperature:
     # T2m moyenne, maximum et minimum journaliers calculés à partir de la T2m
     # horaire ERA5 (jours UTC), voir operations/download_era5_hourly.py.
