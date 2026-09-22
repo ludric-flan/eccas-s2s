@@ -43,6 +43,8 @@ from eccas_s2s.validate.pooled import MAX_PIXELS, pooled_frame
 from eccas_s2s.validate.r_bridge import RNotAvailable, check_packages, run_zone_diagrams
 
 N_BOOT = 300
+VARIABLE_LABEL = {"precip": "Rainfall", "t2m": "Température moyenne",
+                  "tmax": "Température maximale", "tmin": "Température minimale"}
 
 
 def run(config: str, systems=("c3s",), variables=("precip",), models=None, scales=None,
@@ -83,8 +85,7 @@ def run(config: str, systems=("c3s",), variables=("precip",), models=None, scale
                     # the observation is already restricted to the CEEAC mask, so
                     # the pooled sample covers the verified cells and no other
                     mask = pairs["obs"].notnull().any(["year", "period"])
-                    labels = {p.key: p.label_fr(cfg.init_date.year, with_dates=True)
-                              for p in periods}
+                    labels = {p.key: p.label_fr(cfg.init_date.year) for p in periods}
                     model_label = (cfg.c3s_models[model].label if system == "c3s"
                                    else model)
                     for scale in sorted({p.scale for p in periods}):
@@ -93,8 +94,9 @@ def run(config: str, systems=("c3s",), variables=("precip",), models=None, scale
                                              max_pixels=max_pixels)
                         frame["period_label"] = frame["period"].map(labels)
                         zdir = score_paths(out / "diagrams", system, model, variable, scale)
-                        label = (f"{model_label} — {variable} — masque CEEAC "
-                                 f"(init. {cfg.init_date.date()})")
+                        label = (f"{model_label} — {VARIABLE_LABEL.get(variable, variable)}"
+                                 f" — Init : {cfg.init_date.date()} | Hindcast Period : "
+                                 f"{pairs.attrs.get('years', '')}")
                         try:
                             figures = run_zone_diagrams(frame, zdir, label, n_boot=n_boot)
                         except RNotAvailable as exc:

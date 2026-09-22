@@ -380,6 +380,7 @@ def run(config: str, systems=("c3s", "nmme"), variables=("precip",), models=None
                     maps.attrs.update({**ctx.netcdf_attrs(), "system": system, "model": model,
                                        "variable": variable, "kind": "raw hindcast skill",
                                        "n_years": pairs.attrs["n_years"],
+                                       "hindcast_period": pairs.attrs.get("years", ""),
                                        "n_members": pairs.attrs["n_members"],
                                        "mask": "CEEAC (shapefile)",
                                        "mask_cells": pairs.attrs.get("mask_cells"),

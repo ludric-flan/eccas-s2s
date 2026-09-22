@@ -42,7 +42,7 @@ dir.create(file.path(OUT, "reliability"), recursive = TRUE, showWarnings = FALSE
 dir.create(file.path(OUT, "roc"), recursive = TRUE, showWarnings = FALSE)
 
 CATS      <- c("BN", "NN", "AN")
-CAT_NAME  <- c(BN = "Déficitaire", NN = "Normal", AN = "Excédentaire")
+CAT_NAME  <- c(BN = "Below Normal", NN = "Near Normal", AN = "Above Normal")
 CAT_COL   <- c(BN = "#E07B39", NN = "#4CAF50", AN = "#2196F3")
 SPARSE_COL <- "grey55"
 CLIM_P    <- 1 / 3
@@ -271,7 +271,7 @@ for (per in unique(pairs$period)) {
       stringsAsFactors = FALSE)
   }
   per_label <- if ("period_label" %in% names(d)) as.character(d$period_label[1]) else per
-  sub <- sprintf("%s — %s  (points de grille CEEAC poolés)", LABEL, per_label)
+  sub <- sprintf("%s — %s", LABEL, per_label)
 
   png_open(file.path(OUT, "reliability", sprintf("%s.png", per)), w = 1150, h = 1400)
   op <- par(oma = c(0, 0, 3.2, 0))

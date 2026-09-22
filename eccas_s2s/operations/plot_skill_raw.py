@@ -34,12 +34,12 @@ import xarray as xr
 from eccas_s2s.operations.skill_raw import METRICS, score_paths, skill_dir
 from eccas_s2s.provenance import RunContext
 from eccas_s2s.settings import load_cycle
-from eccas_s2s.viz.ceeac_maps import map_score
+from eccas_s2s.viz.ceeac_maps import map_score, metric_title
 
-VARIABLE_LABEL = {"precip": "Pluie", "t2m": "Température moyenne",
+VARIABLE_LABEL = {"precip": "Rainfall", "t2m": "Température moyenne",
                   "tmax": "Température maximale", "tmin": "Température minimale"}
-CATEGORY_LABEL = {"BN": "catégorie déficitaire", "NN": "catégorie normale",
-                  "AN": "catégorie excédentaire"}
+#: category names in the wording of the regional bulletins (RCC).
+CATEGORY_LABEL = {"BN": "Below Normal", "NN": "Near Normal", "AN": "Above Normal"}
 
 
 def _model_label(cfg, system: str, model: str) -> str:
@@ -82,8 +82,11 @@ def run(config: str, metrics=METRICS, scales=None, variables=None, models=None,
                 ctx.record_input(f, role="skill_netcdf")
                 out_dir = score_paths(root / "figures", system, model, variable, scale) / metric
                 cats = list(da["category"].values) if "category" in da.dims else [None]
+                hind = attrs.get("hindcast_period", "")
                 for key in [str(k) for k in da["period"].values]:
-                    fr = str(da["label_fr"].sel(period=key).values)
+                    # the title carries the period alone; its exact window is in
+                    # the netCDF and would only crowd the figure
+                    fr = str(da["label_fr"].sel(period=key).values).split(" (")[0]
                     for cat in cats:
                         field, name, extra = da.sel(period=key), key, ""
                         if cat is not None:
@@ -94,10 +97,9 @@ def run(config: str, metrics=METRICS, scales=None, variables=None, models=None,
                         map_score(
                             field, metric=metric, variable=variable, shapefile=shapefile,
                             logo=logo, extent=extent,
-                            title=f"{label} — {VARIABLE_LABEL.get(variable, variable)}{extra}",
-                            subtitle=(f"{fr}   |   initialisation {init}   |   hindcast "
-                                      f"{attrs.get('n_years', '?')} ans, validation croisée "
-                                      f"{attrs.get('cross_validation', 'LOYO')}"),
+                            title=(f"{label} — {VARIABLE_LABEL.get(variable, variable)}{extra}"
+                                   f" — {metric_title(metric)}\n{fr}"),
+                            subtitle=f"Init : {init}   |   Hindcast Period : {hind}",
                             output_path=out)
                         ctx.record_output(out, role="skill_map", system=system, model=model,
                                           variable=variable, scale=scale, metric=metric,

@@ -231,58 +231,71 @@ BIAS_CMAP = {"precip": "BrBG", "t2m": "RdBu_r", "tmax": "RdBu_r", "tmin": "RdBu_
 SKILL_STYLES = {
     "pearson": dict(colors=_SKILL_CMAP,
                     levels=[-1, -0.4, -0.2, 0, 0.1, 0.2, 0.3, 0.4, 0.6, 1],
-                    label="corrélation de Pearson", no_skill=0.0,
-                    caption="Corrélation > 0 : le modèle suit le sens des variations observées. "
-                            "Au-delà de 0,40 elle est significative à 5 % sur 24 années ; "
-                            "en dessous de 0 (gris) le modèle n'apporte rien."),
+                    title="Corrélation de Pearson", label="corrélation de Pearson", no_skill=0.0,
+                    caption="Corrélation > 0 : le modèle suit le sens des variations observées ; "
+                            "au-delà de 0,40 le lien est significatif à 5 % sur 24 années. "
+                            "Une corrélation fortement négative (proche de −1) est tout aussi "
+                            "informative : le signal existe mais son signe est inversé, et une "
+                            "calibration (P3) peut le récupérer. Seules les valeurs proches de "
+                            "zéro traduisent une absence de lien."),
     "spearman": dict(colors=_SKILL_CMAP,
                      levels=[-1, -0.4, -0.2, 0, 0.1, 0.2, 0.3, 0.4, 0.6, 1],
-                     label="corrélation de rang (Spearman)", no_skill=0.0,
+                     title="Corrélation de rang (Spearman)", label="corrélation de rang (Spearman)", no_skill=0.0,
                      caption="Même lecture que la corrélation de Pearson, mais sur les rangs : "
-                             "insensible aux valeurs extrêmes. > 0 utile, gris = sans skill."),
+                             "insensible aux valeurs extrêmes. Les valeurs fortement négatives "
+                             "sont informatives (signal de signe inversé) ; c'est autour de zéro "
+                             "qu'il n'y a rien à exploiter."),
     "acc": dict(colors=_SKILL_CMAP,
                 levels=[-1, -0.4, -0.2, 0, 0.1, 0.2, 0.3, 0.4, 0.6, 1],
-                label="ACC (corrélation d'anomalies)", no_skill=0.0,
+                title="ACC — corrélation d'anomalies", label="ACC (corrélation d'anomalies)", no_skill=0.0,
                 caption="ACC > 0 : les anomalies prévues vont dans le sens des anomalies "
-                        "observées ; > 0,40 : lien net. Gris = sans skill."),
+                        "observées ; > 0,40 : lien net. Une ACC fortement négative signale un "
+                        "signal systématiquement inversé, exploitable après calibration ; "
+                        "l'absence de skill, c'est autour de zéro."),
     "msess": dict(colors=_SKILL_CMAP,
                   levels=[-1, -0.3, -0.1, 0, 0.05, 0.1, 0.2, 0.3, 0.5, 1],
-                  label="MSESS", no_skill=0.0,
+                  title="MSESS — erreur quadratique réduite", label="MSESS", no_skill=0.0,
                   caption="MSESS > 0 : l'erreur quadratique du modèle est plus faible que celle "
                           "de la climatologie. Gris : la moyenne climatologique fait mieux que "
                           "le modèle brut — c'est fréquent tant que le biais n'est pas corrigé."),
     "rpss": dict(colors=_SKILL_CMAP,
                  levels=[-1, -0.3, -0.1, 0, 0.05, 0.1, 0.2, 0.3, 0.5, 1],
-                 label="RPSS", no_skill=0.0,
+                 title="RPSS — score de probabilité par rangs réduit", label="RPSS", no_skill=0.0,
                  caption="RPSS > 0 : les probabilités des trois catégories valent mieux que la "
-                         "prévision climatologique (1/3, 1/3, 1/3). Gris = sans skill "
-                         "probabiliste."),
+                         "prévision climatologique (1/3, 1/3, 1/3). Attention : un RPSS négatif "
+                         "ne veut pas dire que le modèle est inutile — il est le plus souvent "
+                         "surconfiant, défaut que la calibration (P3) corrige, et il peut garder "
+                         "un pouvoir de discrimination (voir les cartes ROC et GROC). Sur 24 "
+                         "années, un écart de quelques centièmes n'est pas significatif."),
     "bss": dict(colors=_SKILL_CMAP,
                 levels=[-1, -0.3, -0.1, 0, 0.05, 0.1, 0.2, 0.3, 0.5, 1],
-                label="BSS (score de Brier réduit)", no_skill=0.0,
+                title="BSS — score de Brier réduit", label="BSS (score de Brier réduit)", no_skill=0.0,
                 caption="BSS > 0 : pour cette catégorie, la probabilité prévue bat la "
-                        "climatologie. Gris = sans skill."),
+                        "climatologie. Comme pour le RPSS, un BSS négatif traduit d'abord une "
+                        "surconfiance des probabilités brutes, corrigible par calibration, et "
+                        "non l'absence de tout signal : la décomposition (fiabilité, résolution) "
+                        "et l'aire ROC disent lequel des deux manque."),
     "roc_area": dict(colors=_SKILL_CMAP,
                      levels=[0, 0.3, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.8, 1],
-                     label="aire sous la courbe ROC", no_skill=0.5,
+                     title="Aire sous la courbe ROC (AUC)", label="aire sous la courbe ROC", no_skill=0.5,
                      caption="AUC > 0,5 : le modèle sépare les années où la catégorie survient "
                              "de celles où elle ne survient pas ; > 0,70 : discrimination "
                              "utile pour l'alerte. Gris (≤ 0,5) : aucune discrimination."),
     "groc": dict(colors=_SKILL_CMAP,
                  levels=[0, 0.3, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.8, 1],
-                 label="GROC (ROC généralisé, 3 catégories)", no_skill=0.5,
+                 title="GROC — ROC généralisé", label="GROC (ROC généralisé, 3 catégories)", no_skill=0.5,
                  caption="GROC > 0,5 : sur une paire d'années de catégories différentes, le "
                          "modèle classe le plus souvent la bonne année devant l'autre ; "
                          "> 0,70 : discrimination utile. Gris (≤ 0,5) : aucune."),
-    "bias": dict(cmap="BrBG", levels=None, label="biais", no_skill=0.0, symmetric=True,
+    "bias": dict(cmap="BrBG", levels=None, title="Biais moyen", label="biais", no_skill=0.0, symmetric=True,
                  caption="Biais du modèle brut : proche de 0 = pas de dérive systématique. "
                          "Positif = modèle trop humide (ou trop chaud), négatif = trop sec "
                          "(ou trop froid). C'est ce que la calibration (P3) corrige en premier."),
-    "rmse": dict(cmap="YlOrRd", levels=None, label="RMSE", no_skill=None,
+    "rmse": dict(cmap="YlOrRd", levels=None, title="RMSE — erreur quadratique moyenne", label="RMSE", no_skill=None,
                  caption="Erreur quadratique moyenne, dans l'unité de la variable : plus elle "
                          "est faible, mieux c'est. Pour savoir si elle est bonne, la comparer "
                          "à la climatologie : c'est ce que fait le MSESS."),
-    "mae": dict(cmap="YlOrRd", levels=None, label="MAE", no_skill=None,
+    "mae": dict(cmap="YlOrRd", levels=None, title="MAE — erreur absolue moyenne", label="MAE", no_skill=None,
                 caption="Erreur absolue moyenne, dans l'unité de la variable : plus faible = "
                         "meilleur."),
 }
@@ -291,6 +304,19 @@ SKILL_STYLES = {
 #: unit of the variable, appended to the colour bar of the dimensional metrics.
 UNITS = {"precip": "mm", "t2m": "°C", "tmax": "°C", "tmin": "°C"}
 DIMENSIONAL = ("bias", "rmse", "mae", "rmse_clim")
+
+
+#: short name of each metric, for the title of a figure (the full wording stays
+#: on the colour bar and in the caption, where there is room for it).
+METRIC_SHORT = {"pearson": "Pearson", "spearman": "Spearman", "acc": "ACC",
+                "msess": "MSESS", "rpss": "RPSS", "bss": "BSS",
+                "roc_area": "AUC (ROC)", "groc": "GROC", "bias": "Biais",
+                "rmse": "RMSE", "mae": "MAE"}
+
+
+def metric_title(metric: str) -> str:
+    """Short name of a metric, for the title of a figure."""
+    return METRIC_SHORT.get(metric, metric)
 
 
 def style_of(metric: str, variable: str = "precip") -> dict:
@@ -352,7 +378,14 @@ def map_score(field, *, metric: str, variable: str = "precip", shapefile=None, l
     lon_span, lat_span = extent[1] - extent[0], extent[3] - extent[2]
     ax_w = float(map_width)
     ax_h = ax_w * lat_span / lon_span
-    left, right, head, foot = 0.75, 1.70, 1.20, 1.05
+    # the header grows with the number of title and subtitle lines: a three-line
+    # title used to push the subtitle over the map frame.
+    title_text = _wrap(title, 52) if title else ""
+    sub_text = _wrap(subtitle, 62) if subtitle else ""
+    n_title = title_text.count("\n") + 1 if title_text else 0
+    n_sub = sub_text.count("\n") + 1 if sub_text else 0
+    left, right, foot = 0.75, 1.70, 1.05
+    head = 0.22 + 0.27 * n_title + 0.26 * n_sub + 0.16
     fig_w, fig_h = left + ax_w + right, head + ax_h + foot
     fig = plt.figure(figsize=(fig_w, fig_h))
     ax = fig.add_axes([left / fig_w, foot / fig_h, ax_w / fig_w, ax_h / fig_h],
@@ -362,12 +395,12 @@ def map_score(field, *, metric: str, variable: str = "precip", shapefile=None, l
                          norm=norm, shading="nearest", transform=ccrs.PlateCarree())
 
     centre = (left + ax_w / 2) / fig_w
-    if title:
-        fig.text(centre, 1 - 0.30 / fig_h, title, ha="center", va="top",
-                 fontsize=12.5, fontweight="bold")
-    if subtitle:
-        fig.text(centre, 1 - 0.68 / fig_h, _wrap(subtitle, 78), ha="center", va="top",
-                 fontsize=9.5, color="#333333")
+    if title_text:
+        fig.text(centre, 1 - 0.18 / fig_h, title_text, ha="center", va="top",
+                 fontsize=12.5, fontweight="bold", linespacing=1.32)
+    if sub_text:
+        fig.text(centre, 1 - (0.26 + 0.27 * n_title) / fig_h, sub_text,
+                 ha="center", va="top", fontsize=11.5, color="#333333", linespacing=1.32)
 
     cax = fig.add_axes([(left + ax_w + 0.22) / fig_w, (foot + 0.05 * ax_h) / fig_h,
                         0.22 / fig_w, 0.90 * ax_h / fig_h])
@@ -380,7 +413,8 @@ def map_score(field, *, metric: str, variable: str = "precip", shapefile=None, l
     if text:
         fig.text(centre, (foot - 0.40) / fig_h, _wrap(text, 92), ha="center", va="top",
                  fontsize=8.8, style="italic", color="#333333")
-    add_figure_logo(fig, logo, width=0.9 / fig_w, height=0.5 / fig_h)
+    # logo inside the map frame, upper-right corner, as in the reference chain
+    add_logo(ax, logo, zoom=0.27, loc="upper right")
     if output_path:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(output_path, dpi=DPI, facecolor="white")
@@ -390,6 +424,8 @@ def map_score(field, *, metric: str, variable: str = "precip", shapefile=None, l
 
 
 def _wrap(text: str, width: int) -> str:
+    """Wrap to ``width``, keeping the line breaks the caller asked for."""
     import textwrap
 
-    return "\n".join(textwrap.wrap(text, width))
+    return "\n".join("\n".join(textwrap.wrap(line, width)) or line
+                     for line in str(text).split("\n"))
