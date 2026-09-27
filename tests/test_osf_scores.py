@@ -326,31 +326,38 @@ def test_pooled_frame_without_members_has_no_probability():
 
 
 @pytest.mark.skipif(RSCRIPT is None, reason="Rscript absent")
-def test_zone_diagrams_draw_two_figures(tmp_path):
-    """One reliability figure and one ROC figure per period, three categories each."""
-    from eccas_s2s.validate.pairs import build_pairs
-    from eccas_s2s.validate.pooled import pooled_frame
+def test_family_diagrams_draw_two_figures(tmp_path):
+    """One reliability figure and one ROC figure per period, every class of the family."""
+    from eccas_s2s.calibrate.base import RawEnsemble
+    from eccas_s2s.products.catalogue import families
+    from eccas_s2s.validate.pooled import family_frame, family_series
+    from eccas_s2s.validate.product_scores import ObservationContext
     from eccas_s2s.validate.r_bridge import run_zone_diagrams
     from eccas_s2s.validate.scores import roc_area
 
     fc, ob = _grid_ensemble()
-    ds = build_pairs(fc, ob)
-    frame = pooled_frame(ds, _mask_of(ob))
-    frame["period_label"] = "SON 2026"
-    figures = run_zone_diagrams(frame, tmp_path, "test|precip|CEEAC", n_boot=30)
-    # une figure par métrique, dans son propre dossier
+    obs = ob.isel(period=0, drop=True)
+    ctx = ObservationContext(obs, "precip", "season", {})
+    dist = RawEnsemble(fc.isel(period=0, drop=True))
+    products = families("precip", "season", {})["terciles"]
+    series = family_series(dist, ctx, "terciles", products)
+    frame = family_frame(series, _mask_of(ob), "SON", "SON 2026")
+
+    figures = run_zone_diagrams(frame, tmp_path, "test|precip|CEEAC", n_boot=30,
+                                family="terciles")
     assert sorted(str(f.relative_to(tmp_path)) for f in figures) == [
         "reliability/SON.png", "roc/SON.png"]
     scores = pd.read_csv(tmp_path / "diagram_scores.csv")
-    assert list(scores["category"]) == ["BN", "NN", "AN"]
+    assert list(scores["series"]) == ["BN", "NN", "AN"]
     # the R area of the pooled sample is the pooled version of the Python map
-    py = float(roc_area(ds["prob"].sel(category="AN"),
-                        (ds["obs_cat"] == 2).astype(float)).mean())
-    assert abs(float(scores.set_index("category").loc["AN", "roc_area"]) - py) < 0.1
+    prob = dist.tercile_probs(ctx.q33, ctx.q67)
+    py = float(roc_area(prob.sel(category="AN"), (ctx.obs_cat == 2).astype(float)).mean())
+    assert abs(float(scores.set_index("series").loc["AN", "roc_area"]) - py) < 0.1
 
 
 @pytest.mark.skipif(RSCRIPT is None, reason="Rscript absent")
-def test_zone_diagrams_skip_systems_without_members(tmp_path):
+def test_diagrams_skip_a_frame_without_probabilities(tmp_path):
+    """A frame that carries no probability column produces no figure, and no failure."""
     from eccas_s2s.validate.pairs import build_pairs
     from eccas_s2s.validate.pooled import pooled_frame
     from eccas_s2s.validate.r_bridge import run_zone_diagrams
@@ -359,21 +366,32 @@ def test_zone_diagrams_skip_systems_without_members(tmp_path):
     assert run_zone_diagrams(frame, tmp_path, "nmme|precip|domain", n_boot=30) == []
 
 
-def test_summary_rows_without_probabilities():
-    """A member-less system is judged on the deterministic criterion alone."""
-    from eccas_s2s.operations.skill_raw import summary_rows
-    from eccas_s2s.validate.pairs import build_pairs
-    from eccas_s2s.validate.scores import deterministic_scores
+def test_summary_rows_carry_the_product_and_its_deciding_metric():
+    """Each row says which product it judges, and with which metric it decides."""
+    from eccas_s2s.calibrate.base import RawEnsemble
+    from eccas_s2s.operations.skill_raw import product_summary_rows
+    from eccas_s2s.products.catalogue import VALUE
+    from eccas_s2s.validate.product_scores import ObservationContext, product_maps
 
     fc, ob = _grid_ensemble()
-    pairs = build_pairs(fc.mean("number"), ob)
-    maps = deterministic_scores(pairs["ensmean"], pairs["obs"]).assign_coords(
+    obs = ob.isel(period=0, drop=True)
+    ctx = ObservationContext(obs, "precip", "season", {"exceedance_mm": {"season": [300]}})
+
+    # a member-less system (an ensemble mean) carries no probability: only the
+    # value products are scored, as decision D22 requires
+    ens_mean = fc.mean("number").isel(period=0, drop=True).expand_dims({"number": [0]})
+    maps = product_maps(RawEnsemble(ens_mean), ctx, kinds=(VALUE,))
+    assert set(maps) == {"cumul", "anomalie", "spi"}
+
+    cumul = maps["cumul"].expand_dims({"period": ["season_m0"]}).assign_coords(
         label=("period", ["SON 2026"]), scale=("period", ["season"]))
-    maps.attrs.update(n_years=24, n_members=0)
-    rows = summary_rows(maps, _mask_of(ob), "nmme", "CFSv2", "precip", {"SON": 0})
-    assert len(rows) == 1 and rows[0]["probabilistic"] is False
-    assert "rpss_median" not in rows[0] and "frac_rpss_positive" not in rows[0]
-    assert rows[0]["eligible"] == (rows[0]["frac_pearson_positive"] >= 0.05)
+    cumul.attrs.update(maps["cumul"].attrs, n_members=0)
+    rows = product_summary_rows(cumul, _mask_of(ob), "c3s", "ecmwf", "precip", "season",
+                                "cumul", {"season_m0": 0})
+    by_metric = {r["metric"]: r for r in rows}
+    assert by_metric["msess"]["deciding"] and not by_metric["acc"]["deciding"]
+    assert by_metric["acc"]["discrimination"]          # le compagnon du registre
+    assert by_metric["msess"]["product"] == "cumul"
 
 
 @pytest.mark.skipif(RSCRIPT is None, reason="Rscript absent")

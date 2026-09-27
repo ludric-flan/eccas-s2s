@@ -81,7 +81,11 @@ def fraction_above(score: xr.DataArray, mask: xr.DataArray, threshold: float = 0
     where the score is missing leave both the numerator and the denominator.
     """
     valid = mask & score.notnull()
-    w = np.cos(np.deg2rad(score["latitude"])).broadcast_like(score).where(valid)
+    # cos(latitude) weighting where there is a latitude; a synthetic field
+    # without one (tests, profiles) is weighted uniformly rather than refused
+    weight = (np.cos(np.deg2rad(score["latitude"])) if "latitude" in score.coords
+              else xr.ones_like(score))
+    w = weight.broadcast_like(score).where(valid)
     total = float(w.sum())
     if total == 0:
         return float("nan")

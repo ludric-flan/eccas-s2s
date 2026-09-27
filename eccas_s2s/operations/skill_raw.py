@@ -46,14 +46,18 @@ import pandas as pd
 import xarray as xr
 
 from eccas_s2s.core.geo import fraction_above, mask_like
-from eccas_s2s.core.periods import build_periods
+from eccas_s2s.io.netcdf import open_cf, save as save_cf
+from eccas_s2s.core.periods import (add_period_arguments, announce_subset,
+                                    selected_periods)
 from eccas_s2s.obs.climatology import obs_period_totals
 from eccas_s2s.obs.regrid import conservative_to_degree, match_model_grid
 from eccas_s2s.operations import c3s_totals, nmme_totals, obs_chirps, obs_era5
 from eccas_s2s.provenance import RunContext
 from eccas_s2s.settings import load_cycle
+from eccas_s2s.calibrate.base import RawEnsemble
+from eccas_s2s.products.catalogue import VALUE
 from eccas_s2s.validate.pairs import build_pairs
-from eccas_s2s.validate.scores import deterministic_scores, tercile_skill
+from eccas_s2s.validate.product_scores import ObservationContext, product_maps
 
 #: how the observation of each variable is aggregated over a period.
 AGGREGATION = {"precip": "sum", "t2m": "mean", "tmax": "mean", "tmin": "mean"}
@@ -85,6 +89,21 @@ def split_skill_name(name: str) -> tuple[str, str, str]:
     system, rest = name.replace("_skill", "").split("_", 1)
     model, variable = rest.rsplit("_", 1)
     return system, model, variable
+
+
+def horizon_days(cfg, system: str, model: str) -> int:
+    """
+    Forecast horizon a system is processed over.
+
+    A C3S model is processed over the horizon it actually delivers. NMME is
+    capped at the **longest C3S horizon** (decision of 23/09/2026): it publishes
+    twice as far ahead, but a period no C3S model reaches cannot enter the
+    multi-model, and calibrating it would double the computation for a product
+    that would stand alone.
+    """
+    if system == "c3s":
+        return max(int(cfg.c3s_models[model].max_lead_days), 1)
+    return max(int(m.max_lead_days) for m in cfg.c3s_models.values())
 
 
 def skill_dir(cfg, kind: str = "raw") -> Path:
@@ -157,14 +176,32 @@ def _observation_for(cfg, variable: str, periods, years, model_grid: xr.DataArra
     return obs_period_totals(dekads, months, periods, years, how=how).load()
 
 
-def _load_hindcast(cfg, system: str, model: str, variable: str) -> xr.DataArray:
+def hindcast_streams(cfg, system: str, model: str, variable: str, scales) -> dict[str, list[str]]:
+    """
+    Which scales are read from which totals file.
+
+    Only the C3S rainfall is split: UKMO, BoM and NCEP take their months and
+    seasons from the monthly archive, where their lagged members are, and their
+    dekads from the daily one (decision of 23/09/2026). The two files hold
+    **different ensembles** — 28 members against 7 for UKMO — so they are scored
+    separately, each with its own member count in the netCDF attributes and in
+    the summary. Everything else has a single file per model and variable.
+    """
+    if system != "c3s" or variable != "precip":
+        return {"daily": [s for s in scales if s in SYSTEM_SCALES[system]]}
+    return c3s_totals.streams_for(cfg.c3s_models[model], scales)
+
+
+def _load_hindcast(cfg, system: str, model: str, variable: str,
+                   stream: str = "daily") -> xr.DataArray:
     """Hindcast period values of one model (C3S keeps its members, NMME is an ensemble mean)."""
     if system == "c3s":
-        return c3s_totals.load_totals(cfg, model, "hindcast", variable)
+        return c3s_totals.load_totals(cfg, model, "hindcast", variable, stream)
     return nmme_totals.load_totals(cfg, model, variable, "hindcast")
 
 
-def prepare_pairs(cfg, system: str, model: str, variable: str, scales, ctx=None):
+def prepare_pairs(cfg, system: str, model: str, variable: str, scales, ctx=None,
+                  selection=None, stream: str = "daily"):
     """
     Forecast/observation pairs of one model and variable, and their periods.
 
@@ -176,14 +213,12 @@ def prepare_pairs(cfg, system: str, model: str, variable: str, scales, ctx=None)
     built, so every score, map and diagram covers the same cells.
     """
     scales = [s for s in scales if s in SYSTEM_SCALES[system]]
-    hind = _load_hindcast(cfg, system, model, variable).load()
+    hind = _load_hindcast(cfg, system, model, variable, stream).load()
     keep = [p for p in hind["period"].values
             if str(hind["scale"].sel(period=p).values) in scales]
     hind = hind.sel(period=keep)
-    periods = build_periods(
-        cfg.init_date,
-        max((cfg.c3s_models[model].max_lead_days if system == "c3s" else 400), 1),
-        scales=tuple(scales))
+    periods = cfg.periods_for(horizon_days(cfg, system, model), tuple(scales),
+                              selection=selection)
     periods = [p for p in periods if p.key in set(keep)]
     years = [int(y) for y in hind["year"].values]
     obs = _observation_for(cfg, variable, periods, years, hind.isel(period=0), ctx)
@@ -196,112 +231,213 @@ def prepare_pairs(cfg, system: str, model: str, variable: str, scales, ctx=None)
     obs = obs.where(mask)
     pairs = build_pairs(hind, obs)
     pairs.attrs["mask_cells"] = int(mask.sum())
+    pairs.attrs["stream"] = stream
     return pairs, periods
 
 
-def score_paths(out: Path, system: str, model: str, variable: str, scale: str) -> Path:
-    """``<tree>/<system>_<model>/<scale>/<variable>/`` — the branch shared by every output."""
-    return Path(out) / f"{system}_{model}" / scale / variable
-
-
-def write_score_netcdf(maps: xr.Dataset, out: Path, system: str, model: str,
-                       variable: str, scale: str, ctx=None) -> list[Path]:
+def score_paths(out: Path, system: str, model: str, variable: str, scale: str,
+                product: str | None = None) -> Path:
     """
-    One netCDF per metric, with explicit coordinates and units.
+    ``<tree>/<system>_<model>/<scale>/<variable>[/<product>]/`` — the shared branch.
 
-    Splitting the metrics makes each file self-describing (a reader opens
-    ``rpss.nc`` and gets the RPSS, its periods and its no-skill value) and lets a
-    later phase add a metric without rewriting the others. Dimensions are
-    ``(period, latitude, longitude)`` plus ``category`` for the per-category
-    scores; ``period`` carries its key, its English label, its French label and
-    its scale.
+    The product level is what makes the tree readable: a forecaster looking for
+    "can I trust the 200 mm map for OND?" opens
+    ``…/season/precip/depassement_200mm/bss/`` and finds exactly that, instead of
+    a folder of metrics that says nothing about which product they judge.
     """
-    folder = score_paths(out, system, model, variable, scale)
+    base = Path(out) / f"{system}_{model}" / scale / variable
+    return base / product if product else base
+
+
+def write_product_netcdf(maps: xr.Dataset, out: Path, system: str, model: str, variable: str,
+                         scale: str, product: str, ctx=None) -> list[Path]:
+    """
+    One netCDF per metric inside the product's folder, with explicit coordinates.
+
+    Splitting the metrics keeps each file self-describing (a reader opens
+    ``rpss.nc`` and gets the RPSS of that product, its periods and its no-skill
+    value). Dimensions are ``(period, latitude, longitude)``, plus ``category``
+    for the per-category ROC area; ``period`` carries its key, its English label,
+    its French label and its scale.
+    """
+    folder = score_paths(out, system, model, variable, scale, product)
     folder.mkdir(parents=True, exist_ok=True)
+    init = pd.Timestamp(maps.attrs.get("init_date", "1970-01-01"))
     written = []
     for name in maps.data_vars:
         ds = maps[name].to_dataset(name=name)
-        ds["latitude"].attrs.update(units="degrees_north", standard_name="latitude")
-        ds["longitude"].attrs.update(units="degrees_east", standard_name="longitude")
-        ds.attrs.update({**maps.attrs, "metric": str(name), "scale": scale})
-        path = folder / f"{name}.nc"
-        tmp = path.with_suffix(".tmp.nc")
-        ds.to_netcdf(tmp, encoding={name: {"zlib": True, "complevel": 4}})
-        tmp.replace(path)
+        ds.attrs.update({**maps.attrs, "metric": str(name), "scale": scale, "product": product})
+        # written CF-1.8: a real time axis, numeric category flags and character
+        # strings, so the file opens in CDO, ncview or QGIS as well as in xarray
+        path = save_cf(ds, folder / f"{name}.nc", init_year=init.year, init_month=init.month)
         written.append(path)
         if ctx:
             ctx.record_output(path, role="skill_netcdf", system=system, model=model,
-                              variable=variable, scale=scale, metric=str(name))
+                              variable=variable, scale=scale, product=product, metric=str(name))
     return written
 
 
-def summary_rows(maps: xr.Dataset, mask: xr.DataArray, system: str, model: str, variable: str,
-                 lead_of: dict, min_fraction: float = MIN_FRACTION) -> list[dict]:
+def product_summary_rows(maps: xr.Dataset, mask: xr.DataArray, system: str, model: str,
+                         variable: str, scale: str, product: str, lead_of: dict,
+                         stream: str = "daily") -> list[dict]:
     """
-    One summary row per period: medians over the CEEAC mask and eligibility.
+    One row per period and metric: median over the CEEAC mask and positive fraction.
 
-    A system without members carries no probabilistic column at all, and its
-    eligibility (Draft §3.3) rests on the deterministic criterion alone.
+    Two flags carry the meaning of each row. ``deciding`` marks the metric that
+    answers "is this product usable as delivered?"; ``discrimination`` marks the
+    one that answers "is there signal a calibration could recover?". The
+    eligibility register is built from those two alone.
     """
-    has_prob = PROBABILISTIC_CRITERION in maps
+    from eccas_s2s.validate.product_scores import (DISCRIMINATION_OF, LOWER_IS_BETTER,
+                                                   NO_SKILL_VALUE)
+
+    deciding = maps.attrs.get("deciding", "")
+    discrimination = DISCRIMINATION_OF.get(maps.attrs.get("kind", ""), "")
     rows = []
     for key in [str(k) for k in maps["period"].values]:
-        row = {"system": system, "model": model, "variable": variable,
-               "scale": str(maps["scale"].sel(period=key).values),
-               "period": key, "label": str(maps["label"].sel(period=key).values),
-               "label_fr": (str(maps["label_fr"].sel(period=key).values)
-                            if "label_fr" in maps.coords else ""),
-               "lead_month": lead_of.get(key), "n_years": maps.attrs.get("n_years"),
-               "n_members": maps.attrs.get("n_members"), "probabilistic": has_prob}
-        for score in [m for m in METRICS if m in maps and "category" not in maps[m].dims]:
-            row[f"{score}_median"] = float(maps[score].sel(period=key).where(mask).median())
-        row["frac_pearson_positive"] = fraction_above(
-            maps[DETERMINISTIC_CRITERION].sel(period=key), mask)
-        if has_prob:
-            row["frac_rpss_positive"] = fraction_above(
-                maps[PROBABILISTIC_CRITERION].sel(period=key), mask)
-            row["frac_groc_useful"] = fraction_above(maps["groc"].sel(period=key), mask, 0.5)
-            for cat in maps["category"].values:
-                row[f"roc_{cat}_median"] = float(
-                    maps["roc_area"].sel(period=key, category=cat).where(mask).median())
-        row["eligible"] = bool(row["frac_pearson_positive"] >= min_fraction
-                               and (not has_prob or row["frac_rpss_positive"] >= min_fraction))
-        rows.append(row)
+        common = {"system": system, "model": model, "variable": variable, "stream": stream,
+                  "scale": scale, "period": key,
+                  "label": str(maps["label"].sel(period=key).values),
+                  "label_fr": (str(maps["label_fr"].sel(period=key).values)
+                               if "label_fr" in maps.coords else ""),
+                  "lead_month": lead_of.get(key),
+                  "product": product, "product_label": maps.attrs.get("label", product),
+                  "kind": maps.attrs.get("kind", ""),
+                  "n_years": int(maps["n_years"].sel(period=key).max()) if "n_years" in maps else None,
+                  "n_members": maps.attrs.get("n_members"),
+                  "own_climatology": maps.attrs.get("own_climatology")}
+        for name, field in maps.data_vars.items():
+            if name in ("n_years", "base_rate"):
+                continue
+            slices = ([(f"{name}_{c}", field.sel(period=key, category=c))
+                       for c in field["category"].values] if "category" in field.dims
+                      else [(name, field.sel(period=key))])
+            for metric, values in slices:
+                base = metric.split("_")[0]
+                good_when_positive = base not in LOWER_IS_BETTER
+                # an area under the ROC curve has no skill at 0.5, not at 0
+                no_skill = NO_SKILL_VALUE.get(name, NO_SKILL_VALUE.get(base, 0.0))
+                rows.append({**common, "metric": metric,
+                             "deciding": metric == deciding,
+                             "discrimination": name == discrimination,
+                             "no_skill_value": no_skill,
+                             "median": float(values.where(mask).median()),
+                             "fraction_positive": (fraction_above(values, mask, no_skill)
+                                                   if good_when_positive else np.nan)})
     return rows
 
 
-def _write_summary(cfg, ctx, out: Path, rows: list[dict]) -> list[dict]:
-    """Merge the new rows into ``skill_raw_summary.csv`` and refresh the eligibility register."""
+def eligibility_table(table: pd.DataFrame, min_fraction: float = MIN_FRACTION) -> pd.DataFrame:
+    """
+    Which models the workflow can work with, product by product (Draft §3.3).
+
+    The question this register answers is **admission**, not quality: can this
+    model be used at all? The criterion is therefore the **discrimination** — the
+    GROC of a categorical product, the ROC skill of an event, the correlation of
+    a value. A model that cannot separate the years it should from the years it
+    should not carries no information, and no calibration can create any; a model
+    that discriminates but is overconfident or biased is *kept*, because that is
+    precisely what the calibration of phase P3 repairs.
+
+    It is perfectly normal for every model to be admitted. Admission does not say
+    the product will be used **raw**: the column ``usable_raw`` reports, for
+    information, whether the deciding metric is positive on ``min_fraction`` of
+    the mask — and the register of phase P3 will say which calibration to apply.
+
+    Three states:
+
+    ``exploitable — utilisable brut``
+        discrimination present, and the deciding metric positive too;
+    ``exploitable — à calibrer``
+        discrimination present, deciding metric not: the signal is there, the
+        probabilities or the values are not usable as they stand;
+    ``non exploitable``
+        no discrimination on any period — the model is dropped for this product.
+    """
+    keys = ["system", "model", "variable", "stream", "scale", "product", "product_label"]
+    deciding = (table[table["deciding"]].groupby(keys + ["period"])["fraction_positive"]
+                .max().reset_index().rename(columns={"fraction_positive": "frac_deciding"}))
+    signal = (table[table["discrimination"]].groupby(keys + ["period"])["fraction_positive"]
+              .max().reset_index().rename(columns={"fraction_positive": "frac_discrimination"}))
+    per_period = signal.merge(deciding, on=keys + ["period"], how="outer")
+    per_period["has_signal"] = per_period["frac_discrimination"] >= min_fraction
+    per_period["usable_raw"] = per_period["frac_deciding"] >= min_fraction
+
+    agg = (per_period.groupby(keys)
+           .agg(periods=("period", "count"), periods_signal=("has_signal", "sum"),
+                periods_usable_raw=("usable_raw", "sum"),
+                median_frac_discrimination=("frac_discrimination", "median"),
+                median_frac_deciding=("frac_deciding", "median"))
+           .reset_index())
+    agg["eligible"] = agg["periods_signal"] > 0
+    agg["usable_raw"] = agg["periods_usable_raw"] > 0
+    agg["status"] = np.where(~agg["eligible"], "non exploitable",
+                             np.where(agg["usable_raw"], "exploitable — utilisable brut",
+                                      "exploitable — à calibrer"))
+    return agg.sort_values(keys)
+
+
+def models_eligibility(register: pd.DataFrame) -> pd.DataFrame:
+    """
+    One line per model, variable and scale: is it admitted to the workflow?
+
+    A model enters the workflow as soon as **one** of its products discriminates;
+    the count of admitted products says how broadly it is usable, and the count
+    of products usable raw says how much of it needs no calibration.
+    """
+    keys = ["system", "model", "variable", "stream", "scale"]
+    out = (register.groupby(keys)
+           .agg(products=("product", "count"), products_eligible=("eligible", "sum"),
+                products_usable_raw=("usable_raw", "sum"),
+                median_frac_discrimination=("median_frac_discrimination", "median"))
+           .reset_index())
+    out["eligible"] = out["products_eligible"] > 0
+    return out.sort_values(keys)
+
+
+def _write_summary(cfg, ctx, out: Path, rows: list[dict],
+                   min_fraction: float = MIN_FRACTION) -> list[dict]:
+    """Merge the new rows into ``skill_raw_summary.csv`` and refresh the register."""
     table = pd.DataFrame(rows)
     if table.empty:
         return []
     f = out / "skill_raw_summary.csv"
-    keys = ["system", "model", "variable", "period"]
+    keys = ["system", "model", "variable", "scale", "period", "product", "metric"]
     if f.exists():              # keep the rows of the runs not repeated here
         old = pd.read_csv(f)
-        old = old[~old.set_index(keys).index.isin(table.set_index(keys).index)]
-        table = pd.concat([old, table], ignore_index=True)
-    table = table.sort_values(["system", "model", "variable", "scale", "period"])
+        if set(keys) <= set(old.columns):
+            old = old[~old.set_index(keys).index.isin(table.set_index(keys).index)]
+            table = pd.concat([old, table], ignore_index=True)
+        else:
+            ctx.warn("ancienne synthèse dans un format antérieur (sans produit) : remplacée")
+    table = table.sort_values(keys)
     table.to_csv(f, index=False)
     ctx.record_output(f, role="summary")
-    elig = (table.groupby(["system", "model", "variable", "scale"])["eligible"]
-            .agg(["sum", "count"]).reset_index()
-            .rename(columns={"sum": "periods_eligible", "count": "periods"}))
-    elig["eligible"] = elig["periods_eligible"] > 0
-    reg = cfg.path_of("output_root") / "registry"
-    reg.mkdir(parents=True, exist_ok=True)
-    f = reg / "models_eligibility.csv"
-    elig.to_csv(f, index=False)
+
+    register = eligibility_table(table, min_fraction)
+    reg_dir = cfg.path_of("output_root") / "registry"
+    reg_dir.mkdir(parents=True, exist_ok=True)
+    f = reg_dir / "products_eligibility.csv"
+    register.to_csv(f, index=False)
     ctx.record_output(f, role="eligibility")
+    models = models_eligibility(register)
+    f = reg_dir / "models_eligibility.csv"
+    models.to_csv(f, index=False)
+    ctx.record_output(f, role="models_eligibility")
+    counts = register["status"].value_counts().to_dict()
+    ctx.log.info("registre : %s", ", ".join(f"{v} {k}" for k, v in counts.items()))
+    ctx.log.info("modèles admis : %d sur %d (système × modèle × variable × échelle)",
+                 int(models["eligible"].sum()), len(models))
     ctx.record_parameter("n_rows", len(table))
-    return elig.to_dict("records")
+    ctx.record_parameter("register_status", counts)
+    return register.to_dict("records")
 
 
 def rebuild_summary(config: str, min_fraction: float = MIN_FRACTION) -> RunContext:
     """
-    Rebuild the summary table and the eligibility register from the netCDF scores.
+    Rebuild the summary table and the register from the netCDF scores.
 
-    The scores live in ``netcdf/<system>_<model>/<scale>/<variable>/<metric>.nc``;
+    The scores live in ``netcdf/<system>_<model>/<scale>/<variable>/<product>/<metric>.nc``;
     the table is only their summary over the mask, so rebuilding it costs seconds
     when a run is interrupted after the scores are written.
     """
@@ -310,37 +446,50 @@ def rebuild_summary(config: str, min_fraction: float = MIN_FRACTION) -> RunConte
     shapefile = cfg.raw["paths"]["shapefile"]
     with RunContext(cfg, step="skill_raw_summary") as ctx:
         rows = []
-        for folder in sorted((out / "netcdf").glob("*/*/*")):
+        for folder in sorted((out / "netcdf").glob("*/*/*/*")):
             files = sorted(folder.glob("*.nc"))
             if not files:
                 continue
-            system, model = folder.parent.parent.name.split("_", 1)
-            scale, variable = folder.parent.name, folder.name
-            maps = xr.merge([xr.open_dataset(f) for f in files],
+            system, model = folder.parent.parent.parent.name.split("_", 1)
+            scale, variable, product = (folder.parent.parent.name, folder.parent.name,
+                                        folder.name)
+            maps = xr.merge([open_cf(f) for f in files],
                             combine_attrs="override").load()
             for f in files:
                 ctx.record_input(f, role="skill_netcdf")
-            mask = mask_like(shapefile, maps[DETERMINISTIC_CRITERION].isel(period=0, drop=True))
+            first = maps[[v for v in maps.data_vars if v != "n_years"][0]]
+            mask = mask_like(shapefile, first.isel(period=0, drop=True, missing_dims="ignore")
+                             .isel(category=0, drop=True) if "category" in first.dims
+                             else first.isel(period=0, drop=True))
             lead_of = {str(k): int(str(k).split("_")[1].lstrip("m") or 0)
                        for k in maps["period"].values}
-            rows += summary_rows(maps, mask, system, model, variable, lead_of, min_fraction)
-            ctx.log.info("%s %s %s %s : %d période(s)", system, model, variable, scale,
-                         maps.sizes["period"])
-        ctx.record_parameter("eligibility", _write_summary(cfg, ctx, out, rows))
+            rows += product_summary_rows(maps, mask, system, model, variable, scale, product,
+                                         lead_of, stream=maps.attrs.get("stream", "daily"))
+            ctx.log.info("%s %s %s %s %s : %d période(s)", system, model, variable, scale,
+                         product, maps.sizes["period"])
+        ctx.record_parameter("eligibility", _write_summary(cfg, ctx, out, rows, min_fraction))
     return ctx
 
 
 def run(config: str, systems=("c3s", "nmme"), variables=("precip",), models=None,
-        scales=None, min_fraction: float = MIN_FRACTION) -> RunContext:
+        scales=None, min_fraction: float = MIN_FRACTION,
+        selection=None, metrics: str = "deciding") -> RunContext:
     cfg = load_cycle(config)
     out = skill_dir(cfg)
     scales = list(scales) if scales else cfg.scales
+
+    # a system switched off in the configuration is skipped, not attempted
+    systems = [s for s in systems if s in cfg.enabled_systems()]
+    if not systems:
+        raise ValueError("aucun système actif : voir `enabled` dans la configuration du cycle")
 
     with RunContext(cfg, step="skill_raw") as ctx:
         ctx.record_parameter("systems", list(systems))
         ctx.record_parameter("variables", list(variables))
         ctx.record_parameter("scales", scales)
         ctx.record_parameter("min_fraction", min_fraction)
+        ctx.record_parameter("metrics", metrics)
+        announce_subset(cfg, ctx, selection)
         ctx.record_parameter("cross_validation", cfg.cv_scheme)
         ctx.record_parameter("mask", str(cfg.raw["paths"]["shapefile"]))
 
@@ -362,50 +511,87 @@ def run(config: str, systems=("c3s", "nmme"), variables=("precip",), models=None
                 for variable in variables:
                     if system == "nmme" and variable in ("tmax", "tmin"):
                         continue                       # NMME is monthly: no daily extremes
-                    try:
-                        pairs, periods = prepare_pairs(cfg, system, model, variable,
-                                                       sys_scales, ctx)
-                    except (FileNotFoundError, KeyError) as exc:
-                        ctx.warn(f"{system} {model} {variable} : données absentes ({exc})")
-                        continue
-                    ctx.log.info("%s %s %s : %d périodes, %d années", system, model, variable,
-                                 len(periods), pairs.attrs["n_years"])
+                    groups = hindcast_streams(cfg, system, model, variable, sys_scales)
+                    for stream, stream_scales in groups.items():
+                        if not stream_scales:
+                            continue
+                        try:
+                            pairs, periods = prepare_pairs(cfg, system, model, variable,
+                                                           stream_scales, ctx, selection,
+                                                           stream)
+                        except (FileNotFoundError, KeyError) as exc:
+                            ctx.warn(f"{system} {model} {variable} ({stream}) : "
+                                     f"données absentes ({exc})")
+                            continue
+                        ctx.log.info("%s %s %s [%s] : %d périodes, %d années, %d membres",
+                                     system, model, variable, stream, len(periods),
+                                     pairs.attrs["n_years"], pairs.attrs["n_members"])
 
-                    det = deterministic_scores(pairs["ensmean"], pairs["obs"])
-                    has_prob = "prob" in pairs
-                    if has_prob:
-                        prob = tercile_skill(pairs["prob"], pairs["obs_cat"])
-                        # both carry their own sample size; keep them apart
-                        maps = xr.merge([det, prob.rename({"n_years": "n_years_prob"})])
-                    else:
-                        maps = det          # ensemble mean only: deterministic scores only
-                    maps = maps.assign_coords(
-                        label=("period", [p.label(cfg.init_date.year) for p in periods]),
-                        label_fr=("period", [p.label_fr(cfg.init_date.year, with_dates=True)
-                                             for p in periods]),
-                        scale=("period", [p.scale for p in periods]))
-                    maps.attrs.update({**ctx.netcdf_attrs(), "system": system, "model": model,
-                                       "variable": variable, "kind": "raw hindcast skill",
-                                       "n_years": pairs.attrs["n_years"],
-                                       "hindcast_period": pairs.attrs.get("years", ""),
-                                       "n_members": pairs.attrs["n_members"],
-                                       "mask": "CEEAC (shapefile)",
-                                       "mask_cells": pairs.attrs.get("mask_cells"),
-                                       "init_date": str(cfg.init_date.date()),
-                                       "cross_validation": cfg.cv_scheme})
+                        mask = pairs["obs"].notnull().any(["year", "period"])
+                        n_members = int(pairs.attrs["n_members"])
+                        members = pairs["members"] if "members" in pairs else None
+                        base_attrs = {**ctx.netcdf_attrs(), "system": system, "model": model,
+                                      "variable": variable, "kind_of_run": "raw hindcast skill",
+                                      "n_years": pairs.attrs["n_years"],
+                                      "hindcast_period": pairs.attrs.get("years", ""),
+                                      "n_members": n_members, "stream": stream,
+                                      "mask": "CEEAC (shapefile)",
+                                      "mask_cells": pairs.attrs.get("mask_cells"),
+                                      "init_date": str(cfg.init_date.date()),
+                                      "cross_validation": cfg.cv_scheme,
+                                      "metrics_mode": str(metrics)}
+                        var_thresholds = cfg.thresholds.get(variable, {})
 
-                    mask = pairs["obs"].notnull().any(["year", "period"])
-                    for scale in sorted({p.scale for p in periods}):
-                        keys = [p.key for p in periods if p.scale == scale]
-                        write_score_netcdf(maps.sel(period=keys), out / "netcdf", system,
-                                           model, variable, scale, ctx)
-                    summary += summary_rows(maps, mask, system, model, variable,
-                                            {p.key: p.month_offset for p in periods},
-                                            min_fraction)
-                    del pairs, maps
-                    gc.collect()
+                        for scale in sorted({p.scale for p in periods}):
+                            scale_periods = [p for p in periods if p.scale == scale]
+                            by_product: dict[str, list] = {}
+                            for period in scale_periods:
+                                key = period.key
+                                ref = pairs["obs"].sel(period=key, drop=True)
+                                octx = ObservationContext(ref, variable, scale, var_thresholds,
+                                                          mask, "year")
+                                if members is not None:
+                                    dist = RawEnsemble(members.sel(period=key, drop=True))
+                                    kinds = None
+                                else:
+                                    # a system delivered as an ensemble mean carries no
+                                    # probability (D22): only the value products are scored
+                                    dist = RawEnsemble(
+                                        pairs["ensmean"].sel(period=key, drop=True)
+                                        .expand_dims({"number": [0]}))
+                                    kinds = (VALUE,)
+                                maps = product_maps(dist, octx, mode=metrics,
+                                                    n_members=n_members, kinds=kinds)
+                                for name, ds in maps.items():
+                                    by_product.setdefault(name, []).append(
+                                        ds.expand_dims({"period": [key]}))
+                                del maps
+                            labels = {p.key: p.label(cfg.init_date.year) for p in scale_periods}
+                            labels_fr = {p.key: p.label_fr(cfg.init_date.year, with_dates=True)
+                                         for p in scale_periods}
+                            for name, per_period in by_product.items():
+                                merged = xr.concat(per_period, dim="period",
+                                                   combine_attrs="override")
+                                keys = [str(k) for k in merged["period"].values]
+                                merged = merged.assign_coords(
+                                    label=("period", [labels[k] for k in keys]),
+                                    label_fr=("period", [labels_fr[k] for k in keys]),
+                                    scale=("period", [scale] * len(keys)))
+                                merged.attrs = {**base_attrs, **per_period[0].attrs}
+                                write_product_netcdf(merged, out / "netcdf", system, model,
+                                                     variable, scale, name, ctx)
+                                summary += product_summary_rows(
+                                    merged, mask, system, model, variable, scale, name,
+                                    {p.key: p.month_offset for p in scale_periods}, stream)
+                            ctx.log.info("  %s %s : %d produit(s) noté(s) sur %d période(s)",
+                                         scale, variable, len(by_product), len(scale_periods))
+                            del by_product
+                            gc.collect()
 
-        eligibility = _write_summary(cfg, ctx, out, summary) or eligibility
+                        del pairs
+                        gc.collect()
+
+        eligibility = _write_summary(cfg, ctx, out, summary, min_fraction) or eligibility
         ctx.record_parameter("eligibility", eligibility)
     return ctx
 
@@ -419,6 +605,11 @@ def main(argv=None):
     ap.add_argument("--models", nargs="+")
     ap.add_argument("--scales", nargs="+", choices=["decade", "month", "season"])
     ap.add_argument("--min-fraction", type=float, default=MIN_FRACTION)
+    ap.add_argument("--metrics", nargs="+", default=["deciding"],
+                    help="métriques par produit : deciding (défaut : la métrique décisive, "
+                         "sa version débiaisée et la discrimination), reported, all, "
+                         "ou une liste explicite (rpss groc roc_area)")
+    add_period_arguments(ap)
     ap.add_argument("--from-maps", action="store_true",
                     help="reconstruire seulement le tableau de synthèse à partir des cartes déjà écrites")
     args = ap.parse_args(argv)
@@ -426,7 +617,8 @@ def main(argv=None):
         rebuild_summary(args.config, args.min_fraction)
         return
     run(args.config, args.systems, args.variables, args.models, args.scales,
-        args.min_fraction)
+        args.min_fraction, selection=selected_periods(args),
+        metrics=args.metrics[0] if len(args.metrics) == 1 else tuple(args.metrics))
 
 
 if __name__ == "__main__":

@@ -89,27 +89,30 @@ def pairs_to_frame(index: xr.Dataset) -> pd.DataFrame:
 
 
 def run_zone_diagrams(frame: pd.DataFrame, out_dir: str | Path, label: str,
-                      n_boot: int = 200, kind: str = "Raw",
+                      n_boot: int = 200, kind: str = "Raw", family: str = "terciles",
                       rscript: str | None = None) -> list[Path]:
     """
-    Draw the reliability and ROC diagrams of a zone with R.
+    Draw the reliability and ROC diagrams of one **family** of products with R.
 
-    Two figures per period: the attributes/reliability diagram and the ROC
-    diagram, each carrying the three tercile categories on the same axes.
-    ``kind`` opens their titles ("Raw" here, "Calibrated" from phase P3 on).
+    Two figures per period — the attributes/reliability diagram and the ROC
+    diagram — each carrying every class of the family on the same axes: the three
+    terciles, the three SPI classes, the percentile thresholds, or the
+    millimetre thresholds of the scale. ``kind`` opens their titles ("Raw" here,
+    "Calibrated" from phase P3 on) and ``family`` names the family in them.
 
-    ``frame`` holds the **pooled grid-point pairs** of the zone
-    (:func:`eccas_s2s.validate.pooled.pooled_frame`); a frame without
-    probabilities (ensemble-mean system) produces no figure, which the script
-    reports without failing. Returns the figures written.
+    ``frame`` is the long table of pooled grid-point pairs
+    (:func:`eccas_s2s.validate.pooled.family_frame`): one row per class, year and
+    cell, with ``prob`` and ``event``. A frame without those columns produces no
+    figure, which the script reports without failing. Returns the figures written.
     """
     path = find_rscript(rscript)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    pooled_csv = out_dir / "pooled_pairs.csv"
+    pooled_csv = out_dir / "pairs.csv"
     frame.to_csv(pooled_csv, index=False)
     res = subprocess.run([path, str(R_DIAGRAMS), str(pooled_csv), str(out_dir), label,
-                          str(int(n_boot)), kind], capture_output=True, text=True, timeout=7200)
+                          str(int(n_boot)), kind, family],
+                         capture_output=True, text=True, timeout=7200)
     if res.returncode != 0:
         raise RNotAvailable(f"zone_diagrams.R a échoué ({label}) :\n{res.stderr[-800:]}")
     return sorted(out_dir.glob("*/*.png"))

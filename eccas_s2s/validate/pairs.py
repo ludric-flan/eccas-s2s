@@ -61,15 +61,18 @@ def tercile_probabilities(ensemble: xr.DataArray, year_dim: str = "year",
     q = loyo_quantile(ensemble, TERCILES, dims=[member_dim], year_dim=year_dim, method=method)
     q33 = q.sel(quantile=TERCILES[0], drop=True)
     q67 = q.sel(quantile=TERCILES[1], drop=True)
+    # same comparisons as the reference chain (s2s_processing_v2): strict on the
+    # outer categories, closed interval in the middle, so the three add to one
     p_bn = (ensemble < q33).mean(member_dim)
-    p_an = (ensemble >= q67).mean(member_dim)
-    p_nn = 1.0 - p_bn - p_an
+    p_an = (ensemble > q67).mean(member_dim)
+    p_nn = ((ensemble >= q33) & (ensemble <= q67)).mean(member_dim)
     prob = xr.concat([p_bn, p_nn, p_an],
                      dim=xr.DataArray(list(CATEGORIES), dims="category", name="category"))
     prob = prob.where(ensemble.notnull().any(member_dim))
     prob.name = "prob"
     prob.attrs = {"long_name": "raw tercile probabilities (member counting)",
                   "thresholds": "leave-one-year-out terciles of the model hindcast",
+                  "convention": "eccas_s2s.products.raw_products (run_forecast_v2)",
                   "n_members": int(ensemble.sizes[member_dim])}
     return prob
 
@@ -109,6 +112,9 @@ def build_pairs(hindcast: xr.DataArray, obs: xr.DataArray, year_dim: str = "year
             "obs_q67": obs_q.sel(quantile=TERCILES[1], drop=True)}
     if has_members:
         data["prob"] = tercile_probabilities(fc, year_dim, member_dim)
+        # the members themselves: the product scores read the distribution, not
+        # only its mean and its tercile probabilities (phase P2 by product)
+        data["members"] = fc
     else:
         # A system delivered as an ensemble mean (NMME on the NOAA/CPC server)
         # carries no probabilistic information: counting "members" would give

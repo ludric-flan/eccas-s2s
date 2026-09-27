@@ -92,3 +92,89 @@ def pooled_frame(ds: xr.Dataset, mask: xr.DataArray, max_pixels: int = MAX_PIXEL
     frame = frame[np.isfinite(frame["obs"]) & np.isfinite(frame["ensmean"])
                   & np.isfinite(frame["obs_cat"])]
     return frame.reset_index(drop=True)
+
+
+#: bulletin wording of the tercile categories and of the SPI classes
+SERIES_LABEL = {
+    "terciles": {"BN": "Below Normal", "NN": "Near Normal", "AN": "Above Normal"},
+    "classes_spi": {"BN": "SPI sec (< −1)", "NN": "SPI normal", "AN": "SPI humide (> +1)"},
+}
+#: for a threshold in millimetres, a cell where the event never (or always)
+#: happens carries no information and would distort a pooled diagram
+MIN_BASE_RATE = 0.05
+
+
+def family_frame(series, mask: xr.DataArray, period: str, period_label: str = "",
+                 max_pixels: int = MAX_PIXELS, drop_degenerate: bool = False) -> pd.DataFrame:
+    """
+    Long table of one diagram family: ``period, year, cell, series, prob, event``.
+
+    ``series`` is a list of ``(name, label, prob, event)``, each array having
+    dims ``(year, latitude, longitude)``. The grid points of the mask are pooled
+    — a reliability diagram needs hundreds of cases per bin, and 24 years alone
+    cannot fill ten bins — and thinned to ``max_pixels`` by a regular stride.
+
+    ``drop_degenerate`` removes the cells whose observed base rate is below
+    :data:`MIN_BASE_RATE` or above ``1 - MIN_BASE_RATE``. It is used for the
+    millimetre thresholds and only for them: 300 mm in a season is routine at the
+    equator and impossible in the Sahel, so pooling every cell would mix events
+    of very different frequency and the reliability curve would say more about
+    the climate gradient than about the forecast. Terciles, percentiles and SPI
+    classes have the same base rate everywhere by construction, so nothing is
+    dropped for them.
+    """
+    cells = zone_cells(mask, max_pixels)
+    frames = []
+    for name, label, prob, event in series:
+        pair = xr.Dataset({"prob": prob, "event": event})
+        sub = pair.stack(cell=("latitude", "longitude")).sel(cell=cells)
+        sub = sub.transpose("year", "cell")
+        p = np.asarray(sub["prob"].values)
+        e = np.asarray(sub["event"].values)
+        if drop_degenerate:
+            with np.errstate(invalid="ignore"):
+                rate = np.nanmean(e, axis=0)
+            keep = np.isfinite(rate) & (rate >= MIN_BASE_RATE) & (rate <= 1 - MIN_BASE_RATE)
+            p, e = p[:, keep], e[:, keep]
+            kept_cells = np.flatnonzero(keep)
+        else:
+            kept_cells = np.arange(p.shape[1])
+        if p.size == 0:
+            continue
+        years = sub["year"].values
+        frames.append(pd.DataFrame({
+            "period": period, "period_label": period_label,
+            "year": np.repeat(years, len(kept_cells)),
+            "cell": np.tile(kept_cells, len(years)),
+            "series": name, "series_label": label,
+            "prob": p.ravel(), "event": e.ravel()}))
+    if not frames:
+        return pd.DataFrame(columns=["period", "period_label", "year", "cell", "series",
+                                     "series_label", "prob", "event"])
+    frame = pd.concat(frames, ignore_index=True)
+    frame = frame[np.isfinite(frame["prob"]) & np.isfinite(frame["event"])]
+    return frame.reset_index(drop=True)
+
+
+def family_series(dist, ctx, family: str, products) -> list:
+    """
+    ``(name, label, prob, event)`` of every class of a family, ready for the diagram.
+
+    The probabilities come from :func:`eccas_s2s.validate.product_scores.product_probabilities`,
+    the very function the score maps use, so a diagram can never be drawn from
+    probabilities other than the ones scored.
+    """
+    from eccas_s2s.validate.product_scores import product_probabilities
+
+    out = []
+    for product in products:
+        prob, observed = product_probabilities(dist, ctx, product)
+        if "category" in prob.dims:
+            labels = SERIES_LABEL.get(family, {})
+            for index, cat in enumerate(prob["category"].values):
+                name = str(cat)
+                event = (observed == index).astype(float).where(observed.notnull())
+                out.append((name, labels.get(name, name), prob.sel(category=cat), event))
+        else:
+            out.append((product.name, product.label, prob, observed))
+    return out
