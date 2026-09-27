@@ -1,5 +1,6 @@
 """Tests of the calibration methods (phase P3): closed forms, LOYO, and what each one fixes."""
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 
@@ -320,25 +321,47 @@ def test_ngr_tercile_probabilities_are_proper():
 # ------------------------------------------------------- choosing the method
 def _tables():
     """One period, one model: a raw score and three candidate methods."""
-    import pandas as pd
 
     keys = dict(system="c3s", model="ecmwf", variable="precip", scale="season",
                 period="season_m0")
     raw = pd.DataFrame([{**keys, "pearson_median": 0.30, "rpss_median": -0.05,
                          "msess_median": -1.2, "groc_median": 0.62, "label_fr": "SON 2026"}])
     cal = pd.DataFrame([
-        {**keys, "method": "bias_mean", "pearson_median": 0.30, "rpss_median": -0.02},
-        {**keys, "method": "elr", "pearson_median": 0.30, "rpss_median": 0.06},
-        {**keys, "method": "ngr", "pearson_median": 0.29, "rpss_median": 0.04},
+        {**keys, "method": "bias_mean", "pearson_median": 0.30, "rpss_median": -0.02,
+         "msess_median": -0.2},
+        {**keys, "method": "elr", "pearson_median": 0.30, "rpss_median": 0.06,
+         "msess_median": -0.3},
+        {**keys, "method": "ngr", "pearson_median": 0.29, "rpss_median": 0.04,
+         "msess_median": 0.05},
     ])
     return raw, cal
+
+
+def test_raw_baseline_is_the_forecast_untouched():
+    """The `raw` method returns the interpolated members as they are."""
+    from eccas_s2s.calibrate.base import RawForecast
+
+    ens, obs = _hindcast()
+    out = RawForecast("precip").fit_predict_loyo(ens, obs)
+    np.testing.assert_allclose(out.members.values, ens.values)
+
+
+def test_compare_uses_the_raw_rows_of_the_same_table():
+    """Without an explicit raw table, the `raw` method of the table is the reference."""
+    from eccas_s2s.calibrate.selection import compare
+
+    raw, cal = _tables()
+    same_table = pd.concat([cal, raw.assign(method="raw")], ignore_index=True)
+    comp = compare(same_table)
+    assert "raw" not in set(comp["method"])                    # the reference is not a candidate
+    assert float(comp.set_index("method").loc["elr", "gain_prob"]) == pytest.approx(0.11)
 
 
 def test_selection_keeps_only_methods_that_beat_raw_and_climatology():
     from eccas_s2s.calibrate.selection import compare
 
     raw, cal = _tables()
-    comp = compare(raw, cal)
+    comp = compare(cal, raw)
     by_method = comp.set_index("method")
     # bias_mean improves on raw but is still worse than climatology (RPSS < 0)
     assert bool(by_method.loc["bias_mean", "beats_raw"])
@@ -352,7 +375,7 @@ def test_selection_picks_the_best_eligible_method():
     from eccas_s2s.calibrate.selection import compare, recommend
 
     raw, cal = _tables()
-    rec = recommend(compare(raw, cal))
+    rec = recommend(compare(cal, raw))
     assert len(rec) == 1
     assert rec.iloc[0]["method"] == "elr"
     assert rec.iloc[0]["n_eligible"] == 2
@@ -363,16 +386,149 @@ def test_selection_falls_back_on_raw_and_says_why():
 
     raw, cal = _tables()
     cal["rpss_median"] = [-0.04, -0.03, -0.02]          # none beats climatology
-    rec = recommend(compare(raw, cal))
+    rec = recommend(compare(cal, raw))
     assert rec.iloc[0]["method"] == "raw"
     assert "climatologie" in rec.iloc[0]["reason"]
 
 
-def test_selection_rejects_a_method_that_destroys_the_correlation():
-    from eccas_s2s.calibrate.selection import compare
+def test_selection_uses_msess_for_the_value_product():
+    """A value map is judged on the MSESS, not on the RPSS of the categories."""
+    from eccas_s2s.calibrate.selection import compare, recommend
 
     raw, cal = _tables()
-    cal.loc[cal.method == "elr", "pearson_median"] = 0.10      # correlation lost
-    comp = compare(raw, cal).set_index("method")
-    assert not bool(comp.loc["elr", "keeps_correlation"])
-    assert not bool(comp.loc["elr", "eligible_method"])
+    comp = compare(cal, raw)
+    rec = recommend(comp, product="deterministic")
+    assert rec.iloc[0]["method"] == "ngr"          # the only one above climatology in MSESS
+    assert rec.iloc[0]["product"] == "deterministic"
+
+
+def test_correlation_is_reported_but_does_not_gate_the_choice():
+    """
+    A cross-validated regression inherits the negative bias of LOYO correlation;
+    using it as a gate would reject a method for an artefact of the validation.
+    """
+    from eccas_s2s.calibrate.selection import compare, recommend
+
+    raw, cal = _tables()
+    cal.loc[cal.method == "elr", "pearson_median"] = 0.10      # correlation apparently lost
+    comp = compare(cal, raw)
+    assert float(comp.set_index("method").loc["elr", "gain_det"]) == pytest.approx(-0.20)
+    assert bool(comp.set_index("method").loc["elr", "eligible_method"])
+    assert recommend(comp).iloc[0]["method"] == "elr"
+
+
+def test_nmme_is_capped_at_the_longest_c3s_horizon():
+    """NMME publishes twice as far ahead; beyond C3S it could not be combined."""
+    from pathlib import Path
+    from eccas_s2s.core.periods import build_periods
+    from eccas_s2s.operations.skill_raw import horizon_days
+    from eccas_s2s.settings import load_cycle
+
+    cfg = load_cycle(Path(__file__).resolve().parents[1] / "config" / "cycle_202609.yaml")
+    c3s_max = max(int(m.max_lead_days) for m in cfg.c3s_models.values())
+    assert horizon_days(cfg, "nmme", "CFSv2") == c3s_max
+    assert horizon_days(cfg, "c3s", "dwd") == int(cfg.c3s_models["dwd"].max_lead_days)
+    n_nmme = len(build_periods(cfg.init_date, horizon_days(cfg, "nmme", "CFSv2"),
+                               scales=("month", "season")))
+    n_c3s = len(build_periods(cfg.init_date, c3s_max, scales=("month", "season")))
+    assert n_nmme == n_c3s == 12
+
+
+def test_raw_baseline_counts_members_against_the_model_climatology():
+    """
+    The baseline must reproduce the probabilities of phase P2.
+
+    Counting biased members against the *observed* thresholds measures the bias:
+    a model 28 % too dry announces "below normal" every year and scores an RPSS
+    of -0.85, which would make any calibration look miraculous.
+    """
+    from eccas_s2s.calibrate.base import RawForecast
+    from eccas_s2s.validate.pairs import tercile_probabilities
+
+    ens, obs = _hindcast(bias=200.0)                       # a very dry-biased model
+    dist = RawForecast("precip").fit_predict_loyo(ens, obs)
+    q33 = obs.quantile(1 / 3, dim="year").drop_vars("quantile")
+    q67 = obs.quantile(2 / 3, dim="year").drop_vars("quantile")
+    prob = dist.tercile_probs(q33, q67)
+    np.testing.assert_allclose(prob.values, tercile_probabilities(ens).values)
+    # against the observed thresholds the same ensemble would be degenerate
+    naive = (ens < q33).mean("number")
+    assert float(naive.mean()) < 0.05 and float(prob.sel(category="BN").mean()) > 0.2
+
+
+# ------------------------------------------------------------- housekeeping
+def test_housekeeping_removes_what_the_scores_no_longer_justify(tmp_path):
+    """
+    A summary row and a map survive their score: the netCDF tree is the authority.
+
+    This is what left NMME with 22 periods in the table and 18 in the figures
+    after its horizon was capped at the C3S one.
+    """
+    import pandas as pd
+    import yaml
+    from eccas_s2s.operations.housekeeping import prune, scored_periods
+    from eccas_s2s.operations.skill_raw import skill_dir
+    from eccas_s2s.settings import load_cycle
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    raw = yaml.safe_load((repo / "config" / "cycle_202609.yaml").read_text(encoding="utf-8"))
+    for key in ("data_root", "output_root", "archive_root"):
+        raw["paths"][key] = str(tmp_path / key)
+    raw["includes"] = {k: str(repo / "config" / v) for k, v in raw["includes"].items()}
+    cfg_path = tmp_path / "cycle.yaml"
+    cfg_path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+    cfg = load_cycle(cfg_path)
+    root = skill_dir(cfg, "raw")
+
+    # scores for two periods only
+    kept = ["month_m0", "month_m1"]
+    folder = root / "netcdf" / "nmme_CFSv2" / "month" / "precip"
+    folder.mkdir(parents=True)
+    xr.Dataset({"pearson": ("period", [0.3, 0.2])}, coords={"period": kept}).to_netcdf(
+        folder / "pearson.nc")
+    assert scored_periods(root) == {("nmme_CFSv2/month/precip", p) for p in kept}
+
+    # figures and a summary that also carry a third, obsolete period
+    figs = root / "figures" / "nmme_CFSv2" / "month" / "precip" / "pearson"
+    figs.mkdir(parents=True)
+    for name in ("month_m0.png", "month_m1.png", "month_m7.png", "month_m7_AN.png"):
+        (figs / name).write_bytes(b"")
+    rows = [{"system": "nmme", "model": "CFSv2", "variable": "precip", "scale": "month",
+             "period": p, "eligible": True} for p in kept + ["month_m7"]]
+    pd.DataFrame(rows).to_csv(root / "skill_raw_summary.csv", index=False)
+
+    prune(str(cfg_path), kinds=("raw",))
+    assert sorted(p.name for p in figs.iterdir()) == ["month_m0.png", "month_m1.png"]
+    table = pd.read_csv(root / "skill_raw_summary.csv")
+    assert sorted(table["period"]) == kept
+    assert (cfg.path_of("output_root") / "registry" / "models_eligibility.csv").exists()
+
+
+def test_raw_baseline_of_a_member_less_system_has_no_probability():
+    """
+    NMME is an ensemble mean: its "raw probability" would be 0 or 1 (D22).
+
+    The baseline is then absent rather than degenerate, and the register asks the
+    calibrated probabilities to beat climatology alone.
+    """
+    from eccas_s2s.calibrate.base import RawForecast
+
+    ens, obs = _hindcast()
+    mean_only = ens.mean("number")
+    dist = RawForecast("precip").fit_predict_loyo(mean_only, obs)
+    q33 = obs.quantile(1 / 3, dim="year").drop_vars("quantile")
+    q67 = obs.quantile(2 / 3, dim="year").drop_vars("quantile")
+    assert np.isnan(dist.tercile_probs(q33, q67).values).all()
+    assert np.isnan(dist.prob_below(q33).values).all()
+    assert np.isfinite(dist.mean().values).all()          # the value forecast stays
+
+
+def test_selection_lets_a_member_less_system_be_judged_on_climatology_alone():
+    from eccas_s2s.calibrate.selection import compare, recommend
+
+    raw, cal = _tables()
+    raw["rpss_median"] = np.nan                            # no raw probability
+    comp = compare(cal, raw)
+    assert bool(comp.set_index("method").loc["elr", "beats_raw"])
+    assert recommend(comp).iloc[0]["method"] == "elr"

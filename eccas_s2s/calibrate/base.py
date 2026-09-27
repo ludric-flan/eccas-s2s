@@ -164,6 +164,95 @@ class Calibrator:
         return self.predict(ensemble, params, member_dim)
 
 
+class RawEnsemble(EnsembleDistribution):
+    """
+    The raw ensemble, whose categories are read against **its own** climatology.
+
+    This is the one place where the observed thresholds are not used, and it is
+    deliberate: raw model values are biased, so counting their members against
+    the observed terciles measures the bias, not the information. A model 28 %
+    too dry puts every member below the observed lower tercile and announces
+    "below normal" every year — which scored an RPSS of −0.85 when it was tried.
+    The operational raw product, and phase P2, both count the members beyond the
+    model's own leave-one-year-out terciles; the baseline must do the same or it
+    is a straw man that any calibration beats.
+    """
+
+    #: quantile products (terciles, P20, median, P80, SPI classes) are read in
+    #: this distribution's own climatology; a calibrated distribution, which
+    #: already sits on the observation scale, leaves this at False.
+    uses_own_climatology = True
+
+    def _has_members(self) -> bool:
+        return self.members.sizes[self.member_dim] > 1
+
+    def tercile_probs(self, q33: xr.DataArray, q67: xr.DataArray) -> xr.DataArray:
+        from eccas_s2s.validate.pairs import tercile_probabilities
+
+        if not self._has_members():
+            # an ensemble mean carries no probability: counting its single value
+            # gives 0 or 1, which is a categorical forecast in disguise (D22).
+            # The baseline is then simply absent, and the register compares the
+            # calibrated probabilities with climatology alone.
+            empty = xr.full_like(super().tercile_probs(q33, q67), np.nan)
+            empty.attrs["note"] = "système sans membres : pas de probabilité brute"
+            return empty
+        return tercile_probabilities(self.members, member_dim=self.member_dim)
+
+    def prob_below(self, threshold: xr.DataArray) -> xr.DataArray:
+        if not self._has_members():
+            return xr.full_like(super().prob_below(threshold), np.nan)
+        return super().prob_below(threshold)
+
+    def prob_below_own_quantile(self, p: float, year_dim: str = "year") -> xr.DataArray:
+        """
+        P(X < the model's own leave-one-year-out quantile *p*).
+
+        The counterpart of :meth:`tercile_probs` for the other quantile products
+        — P20, median, P80. A product defined by a **position in the
+        distribution** ("the driest fifth of the years") is read in the model's
+        own distribution, exactly as the reference chain does; a product defined
+        in **millimetres** ("more than 200 mm") is not, and goes through
+        :meth:`prob_below` with the absolute threshold. That difference is the
+        whole point of phase P2: the first family says whether the model carries
+        information, the second says whether its values can be used as they are.
+        """
+        from eccas_s2s.validate.cv import loyo_quantile
+
+        if not self._has_members():
+            return xr.full_like(self.members.isel({self.member_dim: 0}, drop=True), np.nan)
+        threshold = loyo_quantile(self.members, p, dims=[self.member_dim], year_dim=year_dim)
+        return (self.members < threshold).mean(self.member_dim)
+
+
+class RawForecast(Calibrator):
+    """
+    The forecast as delivered, read on the observation grid — the baseline.
+
+    It fits nothing: the interpolated members are returned untouched and their
+    probabilities are those of phase P2 (see :class:`RawEnsemble`). Its purpose
+    is to make the comparison fair: the scores of P2 are computed on the
+    **model** grid, and a calibration scored at 0.25° must be compared with a
+    raw forecast scored at 0.25° too. The workflow asks for this baseline in E7
+    for the same reason — a method is only worth its parameters if it beats the
+    interpolated forecast.
+    """
+
+    name = "raw"
+
+    def __init__(self, variable: str = "precip"):
+        self.variable = variable
+
+    def fit(self, ensemble, obs, year_dim: str = YEAR, member_dim: str = MEMBER) -> dict:
+        return {}
+
+    def predict(self, ensemble, params: dict, member_dim: str = MEMBER) -> RawEnsemble:
+        return RawEnsemble(to_ensemble(ensemble, member_dim), member_dim)
+
+    def fit_predict_loyo(self, ensemble, obs, year_dim: str = YEAR, member_dim: str = MEMBER):
+        return self.predict(ensemble, {}, member_dim)
+
+
 def _expand_year(params, year_dim: str, year):
     """Tag every parameter of a fold with the year it predicts."""
     if isinstance(params, dict):

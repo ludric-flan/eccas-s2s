@@ -90,7 +90,7 @@ def crps_normal(y, mu, sigma):
     return sigma * (z * (2.0 * _Phi(z) - 1.0) + 2.0 * _phi(z) - INV_SQRT_PI)
 
 
-def _fit_emos(x, s2, y, n_iter=200, lr=0.05):
+def _fit_emos(x, s2, y, n_iter=120, lr=0.05):
     """
     Minimise the mean CRPS over the last axis, vectorised over the leading ones.
 
@@ -100,7 +100,9 @@ def _fit_emos(x, s2, y, n_iter=200, lr=0.05):
     Start from the least-squares regression of ``y`` on ``x`` (closed form) and
     from the residual spread: the optimiser then only has to share the variance
     between its constant part ``c²`` and the part carried by the ensemble
-    ``d²·s²``, which converges in a couple of hundred cheap steps.
+    ``d²·s²``. Measured on ECMWF/SON: 80, 120 and 200 iterations give the same
+    mean CRPS to 0.04 %, so the default is 120 — 200 was paying twice the time
+    for nothing.
     """
     xm = x.mean(-1, keepdims=True)
     ym = y.mean(-1, keepdims=True)
@@ -150,7 +152,7 @@ class NGR(Calibrator):
     name = "ngr"
 
     def __init__(self, variable: str = "precip", spread_from_ensemble: bool = True,
-                 n_iter: int = 200):
+                 n_iter: int = 120):
         self.variable = variable
         self.transform = transform_for(variable)
         self.spread_from_ensemble = bool(spread_from_ensemble)

@@ -319,6 +319,41 @@ def metric_title(metric: str) -> str:
     return METRIC_SHORT.get(metric, metric)
 
 
+#: how wide a gain is worth drawing, by metric: a hundredth of RPSS is noise on
+#: 24 years, a whole point of MSESS is not
+GAIN_LEVELS = {
+    "rpss": [-0.20, -0.10, -0.05, -0.02, 0, 0.02, 0.05, 0.10, 0.20],
+    "bss": [-0.20, -0.10, -0.05, -0.02, 0, 0.02, 0.05, 0.10, 0.20],
+    "msess": [-1.0, -0.5, -0.2, -0.05, 0, 0.05, 0.2, 0.5, 1.0],
+    "acc": [-0.20, -0.10, -0.05, -0.02, 0, 0.02, 0.05, 0.10, 0.20],
+}
+
+
+def gain_style(metric: str) -> dict:
+    """
+    Diverging scale of a **gain**, centred on zero.
+
+    A gain map answers a different question from a score map — "did the
+    calibration help, and where?" — so it gets its own reading grid: brown where
+    the calibration degrades the score, blue-green where it improves it, white
+    where it changes nothing worth seeing. The scale is symmetric, otherwise the
+    eye reads an improvement into a simple difference of range.
+    """
+    base = metric.replace("gain_", "")
+    levels = GAIN_LEVELS.get(base, GAIN_LEVELS["rpss"])
+    short = METRIC_SHORT.get(base, base.upper())
+    # an explicit palette rather than a named diverging map: the middle colours of
+    # BrBG are so pale that a small positive gain reads as a loss
+    colours = ["#8C510A", "#BF812D", "#DFC27D", "#F6E8C3",      # dégradation
+               "#D9F0D3", "#A6DBA0", "#5AAE61", "#1B7837"]      # amélioration
+    return {"colors": colours, "levels": levels,
+            "label": f"gain de {short} (calibré − brut)",
+            "caption": ("Vert : la calibration améliore le score en cette maille ; brun : elle "
+                        "le dégrade ; blanc : différence négligeable. La référence est la "
+                        "prévision brute interpolée sur la même grille, si bien que l'écart "
+                        "ne vient que de la calibration.")}
+
+
 def style_of(metric: str, variable: str = "precip") -> dict:
     """Colour scale and caption of a metric, adapted to the variable."""
     style = dict(SKILL_STYLES.get(metric, {"cmap": "viridis", "levels": None,
@@ -353,9 +388,64 @@ def _discrete(style: dict, field):
                                                      256, extend="both"), "both"
 
 
+def _nearest_filled(field):
+    """
+    Fill the missing cells with their nearest neighbour, for smooth shading only.
+
+    Gouraud shading interpolates the colour between cell **centres**, so a
+    missing cell blanks the four quads around it: on a masked domain the map
+    would lose a fringe along the whole boundary. Filling first and clipping to
+    the shapefile afterwards keeps the edge exactly where the mask puts it,
+    while the inside is drawn smoothly. Nothing outside the clip is ever shown,
+    so the filled values are never read.
+    """
+    import numpy as np
+    from scipy import ndimage
+
+    values = np.asarray(field.values, dtype=float)
+    holes = ~np.isfinite(values)
+    if not holes.any() or holes.all():
+        return values
+    _, index = ndimage.distance_transform_edt(holes, return_indices=True)
+    return values[tuple(index)]
+
+
+def clip_to_shapefile(artist, ax, shapefile):
+    """
+    Clip a mesh to the union of the shapefile polygons.
+
+    This is what lets the map be smoothed inside and stay sharp at the border:
+    the shading spills over the edge, the clip cuts it back to the CEEAC.
+    """
+    if not shapefile:
+        return
+    import cartopy.crs as ccrs
+    import geopandas as gpd
+    from matplotlib.path import Path as MplPath
+    from matplotlib.patches import PathPatch
+
+    shapes = gpd.read_file(str(shapefile)).to_crs(epsg=4326)
+    polygons = []
+    for geom in shapes.geometry:
+        if geom is None or geom.is_empty:
+            continue
+        parts = geom.geoms if geom.geom_type.startswith("Multi") else [geom]
+        polygons += [list(part.exterior.coords) for part in parts]
+    if not polygons:
+        return
+    vertices, codes = [], []
+    for ring in polygons:
+        vertices += ring
+        codes += [MplPath.MOVETO] + [MplPath.LINETO] * (len(ring) - 2) + [MplPath.CLOSEPOLY]
+    patch = PathPatch(MplPath(vertices, codes), transform=ccrs.PlateCarree()._as_mpl_transform(ax),
+                      facecolor="none", edgecolor="none")
+    ax.add_patch(patch)
+    artist.set_clip_path(patch)
+
+
 def map_score(field, *, metric: str, variable: str = "precip", shapefile=None, logo=None,
               extent=DEFAULT_EXTENT, title="", subtitle="", caption=None, output_path=None,
-              map_width: float = 5.4):
+              map_width: float = 5.4, shading: str = "gouraud", style=None):
     """
     One metric, one period, one map in the CAPC-AC house style.
 
@@ -370,7 +460,7 @@ def map_score(field, *, metric: str, variable: str = "precip", shapefile=None, l
     """
     import cartopy.crs as ccrs
 
-    style = style_of(metric, variable)
+    style = style_of(metric, variable) if style is None else style
     cmap, norm, extend = _discrete(style, field)
 
     # inches: the axes box follows the aspect of the domain, the margins hold
@@ -384,15 +474,26 @@ def map_score(field, *, metric: str, variable: str = "precip", shapefile=None, l
     sub_text = _wrap(subtitle, 62) if subtitle else ""
     n_title = title_text.count("\n") + 1 if title_text else 0
     n_sub = sub_text.count("\n") + 1 if sub_text else 0
-    left, right, foot = 0.75, 1.70, 1.05
+    # the caption is wrapped before the figure is sized: a four-line condition
+    # under a map used to be cut off by the bottom edge
+    caption_text = style.get("caption", "") if caption is None else caption
+    caption_text = _wrap(caption_text, 92) if caption_text else ""
+    n_caption = caption_text.count("\n") + 1 if caption_text else 0
+    left, right = 0.75, 1.70
+    foot = 0.62 + 0.17 * n_caption
     head = 0.22 + 0.27 * n_title + 0.26 * n_sub + 0.16
     fig_w, fig_h = left + ax_w + right, head + ax_h + foot
     fig = plt.figure(figsize=(fig_w, fig_h))
     ax = fig.add_axes([left / fig_w, foot / fig_h, ax_w / fig_w, ax_h / fig_h],
                       projection=ccrs.PlateCarree())
     setup_ax(ax, extent, shapefile, left_labels=True, right_labels=False, bottom_labels=True)
-    mesh = ax.pcolormesh(field["longitude"], field["latitude"], field.values, cmap=cmap,
-                         norm=norm, shading="nearest", transform=ccrs.PlateCarree())
+    # smoothed across the pixels (Gouraud): a score varies continuously in space,
+    # and a blocky map reads as if each cell were an independent measurement
+    values = _nearest_filled(field) if shading == "gouraud" else field.values
+    mesh = ax.pcolormesh(field["longitude"], field["latitude"], values, cmap=cmap,
+                         norm=norm, shading=shading, transform=ccrs.PlateCarree())
+    if shading == "gouraud":
+        clip_to_shapefile(mesh, ax, shapefile)
 
     centre = (left + ax_w / 2) / fig_w
     if title_text:
@@ -409,9 +510,8 @@ def map_score(field, *, metric: str, variable: str = "precip", shapefile=None, l
     cbar.set_label(style.get("label", metric), fontsize=10)
     cbar.ax.tick_params(labelsize=9)
 
-    text = style.get("caption", "") if caption is None else caption
-    if text:
-        fig.text(centre, (foot - 0.40) / fig_h, _wrap(text, 92), ha="center", va="top",
+    if caption_text:
+        fig.text(centre, (foot - 0.30) / fig_h, caption_text, ha="center", va="top",
                  fontsize=8.8, style="italic", color="#333333")
     # logo inside the map frame, upper-right corner, as in the reference chain
     add_logo(ax, logo, zoom=0.27, loc="upper right")

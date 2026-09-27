@@ -37,7 +37,7 @@ from eccas_s2s.calibrate.base import (YEAR, MEMBER, CATEGORIES, Calibrator,
 
 EPS = 1e-9
 RIDGE = 1e-3          # keeps the Newton step finite when a cell is degenerate
-MAX_ITER = 25
+MAX_ITER = 12          # Newton converges well before that (measured: identical probabilities)
 TOL = 1e-7
 
 

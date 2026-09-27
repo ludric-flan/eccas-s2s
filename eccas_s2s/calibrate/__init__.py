@@ -18,10 +18,10 @@ compared with "raw" and with climatology on the same footing. A method is only
 recommended where it beats both.
 """
 from eccas_s2s.calibrate.base import (CATEGORIES, Calibrator, EnsembleDistribution,
-                                      NormalDistribution, PredictiveDistribution)
+                                      NormalDistribution, PredictiveDistribution, RawForecast)
 from eccas_s2s.calibrate.bias import BiasCorrection, bias_calibrators
 from eccas_s2s.calibrate.qmap import QuantileMapping, qmap_calibrators
 
-__all__ = ["CATEGORIES", "BiasCorrection", "Calibrator", "EnsembleDistribution",
+__all__ = ["CATEGORIES", "BiasCorrection", "Calibrator", "EnsembleDistribution", "RawForecast",
            "NormalDistribution", "PredictiveDistribution", "QuantileMapping",
            "bias_calibrators", "qmap_calibrators"]

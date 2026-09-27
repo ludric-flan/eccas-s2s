@@ -31,6 +31,8 @@ from pathlib import Path
 import pandas as pd
 import xarray as xr
 
+from functools import lru_cache
+
 from eccas_s2s.core.geo import mask_like
 from eccas_s2s.operations.calibrate_hindcast import calibrated_dir, observation_on_grid
 from eccas_s2s.operations.skill_raw import (METRICS, _write_summary, skill_dir, summary_rows,
@@ -49,6 +51,23 @@ def _periods_of(cfg, scale: str, keys) -> list:
     return [by_key[k] for k in keys if k in by_key]
 
 
+@lru_cache(maxsize=8)
+def _cached_observation(cfg_id: str, variable: str, scale: str, keys: tuple, years: tuple):
+    """
+    Observation of a (variable, scale) block **and its leave-one-year-out
+    categories**, kept in memory.
+
+    Every method of every model is scored against the same observation and the
+    same categories; recomputing them per file cost more than the scores
+    themselves (38 s of the 40 s spent on a file).
+    """
+    cfg = load_cycle(cfg_id)
+    periods = _periods_of(cfg, scale, keys)
+    obs = observation_on_grid(cfg, variable, periods, list(years)).sel(period=list(keys))
+    obs_cat, _ = observed_categories(obs)
+    return obs.load(), obs_cat.load()
+
+
 def score_file(cfg, path: Path, ctx=None) -> tuple[xr.Dataset, dict]:
     """Scores of one calibrated file, on the grid it was written on."""
     with xr.open_dataset(path) as ds:
@@ -56,10 +75,8 @@ def score_file(cfg, path: Path, ctx=None) -> tuple[xr.Dataset, dict]:
     system, model = cal.attrs["system"], cal.attrs["model"]
     variable, scale, method = cal.attrs["variable"], cal.attrs["scale"], cal.attrs["method"]
     keys = [str(k) for k in cal["period"].values]
-    periods = _periods_of(cfg, scale, keys)
     years = [int(y) for y in cal["year"].values]
-    obs = observation_on_grid(cfg, variable, periods, years).sel(period=keys)
-    obs_cat, _ = observed_categories(obs)
+    obs, obs_cat = _cached_observation(str(cfg.path), variable, scale, tuple(keys), tuple(years))
 
     det = deterministic_scores(cal["forecast"], obs)
     prob = tercile_skill(cal["prob"], obs_cat).rename({"n_years": "n_years_prob"})
