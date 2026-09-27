@@ -33,6 +33,7 @@ import pandas as pd
 import xarray as xr
 
 from eccas_s2s.core.periods import build_periods
+from eccas_s2s.io.netcdf import open_cf, save as save_cf
 from eccas_s2s.io.nmme_cpc import open_nmme_file
 from eccas_s2s.provenance import RunContext
 from eccas_s2s.settings import load_cycle
@@ -49,7 +50,7 @@ def totals_path(cfg, model: str, variable: str, kind: str) -> Path:
 
 
 def load_totals(cfg, model: str, variable: str, kind: str) -> xr.DataArray:
-    return xr.open_dataset(totals_path(cfg, model, variable, kind))[variable]
+    return open_cf(totals_path(cfg, model, variable, kind))[variable]
 
 
 def monthly_values(da: xr.DataArray, nmme_var: str) -> xr.DataArray:
@@ -137,8 +138,8 @@ def run(config: str, models=None) -> RunContext:
                         continue
                     ds = stack.sel(year=ys).to_dataset()
                     ds.attrs.update(ctx.netcdf_attrs())
-                    path = totals_path(cfg, model, name, kind)
-                    ds.to_netcdf(path, encoding={name: {"zlib": True, "complevel": 4}})
+                    path = save_cf(ds, totals_path(cfg, model, name, kind),
+                                   init_year=init.year, init_month=init.month)
                     ctx.record_output(path, role=f"nmme_{name}_{kind}", model=model)
                 summary.append({"model": model, "variable": name, "hindcast_years": f"{years[0]}–{years[-2]}",
                                 "n_hindcast": len(years) - 1, "months": n_months, "periods": len(periods),

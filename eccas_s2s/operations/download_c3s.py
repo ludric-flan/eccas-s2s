@@ -30,9 +30,29 @@ from eccas_s2s.settings import load_cycle
 #: OSF variable name -> key of eccas_s2s.io.c3s.C3S_VARIABLES
 VARIABLE_KEYS = {"precip": "PRCP", "t2m": "TEMP", "tmax": "TMAX", "tmin": "TMIN"}
 
-#: variables taken from the C3S *monthly* statistics (months and seasons only):
-#: the 2 m mean temperature (decision of 2026-09-19, lighter than 6-hourly fields).
+#: variables always taken from the C3S *monthly* statistics: the 2 m mean
+#: temperature (decision of 2026-09-19, lighter than 6-hourly fields). For the
+#: rainfall the stream depends on the **model**, through ``precip_from`` in the
+#: cycle configuration — see :func:`streams_needed`.
 MONTHLY_VARIABLES = {"t2m"}
+
+
+def streams_needed(model, variable: str, stream: str = "auto") -> list[str]:
+    """
+    Streams a model needs for a variable: ``daily``, ``monthly``, or both.
+
+    UKMO and BoM need the daily stream for their dekads and the monthly one for
+    their months and seasons — their daily files only carry the members started
+    on the 1st (2 and 11, against 62 and 121 in the monthly product). NCEP has no
+    daily hindcast at all, so it needs the monthly stream only.
+    """
+    if stream != "auto":
+        return [stream]
+    if variable in MONTHLY_VARIABLES:
+        return ["monthly"]
+    if variable != "precip":
+        return ["daily"]
+    return sorted(set(model.precip_from.values()))
 
 MAX_ATTEMPTS = 5
 
@@ -52,7 +72,7 @@ def _with_retry(func, log, what):
 
 
 def run(config: str, variable: str = "precip", kinds=("forecast", "hindcast"),
-        models=None, dry_run: bool = False) -> RunContext:
+        models=None, dry_run: bool = False, stream: str = "auto") -> RunContext:
     """
     Download (or, with ``dry_run``, only log) the C3S files of a cycle.
 
@@ -83,39 +103,42 @@ def run(config: str, variable: str = "precip", kinds=("forecast", "hindcast"),
 
         for centre in selected:
             m = all_models[centre]
-            monthly = variable in MONTHLY_VARIABLES
-            for kind in kinds:
-                years = [str(init.year)] if kind == "forecast" else [str(y) for y in cfg.c3s_hindcast_years]
-                # hindcasts: one extra lead day so that leap years (29 February)
-                # still cover the last complete period of the horizon
-                n_days = m.max_lead_days + (1 if kind == "hindcast" else 0)
-                leadtime_hours = [str(h) for h in range(24, 24 * n_days + 1, 24)]
-                what = f"{centre} sys {m.system} {kind}"
-                if monthly:
-                    dataset, request = build_c3s_monthly_request(centre, var_key, years, init.month,
-                                                                  area, system=m.system)
-                    shown = dict(request)
-                else:
-                    dataset, request = build_c3s_request(
-                        centre, var_key, years, init.month, area,
-                        system=m.system, leadtime_hours=leadtime_hours)
-                    shown = {**request, "leadtime_hour": f"24..{24 * n_days} (pas 24 h)"}
-                ctx.record_parameter(f"request.{centre}.{kind}", {"dataset": dataset, **shown})
-                if dry_run:
-                    ctx.log.info("[dry-run] %s : %s", what, json.dumps(
-                        {k: v for k, v in request.items() if k != "leadtime_hour"}))
-                    continue
-                try:
-                    path = _with_retry(
-                        lambda: download_c3s(centre, var_key, years, init.month, area, str(dest_dir),
-                                             system=m.system, leadtime_hours=leadtime_hours, kind=kind,
-                                             monthly=monthly),
-                        ctx.log, what)
-                    ctx.record_output(path, role=f"c3s_{variable}_{kind}", centre=centre,
-                                      system=m.system, years=f"{years[0]}-{years[-1]}")
-                except Exception as exc:
-                    failures[what] = f"{type(exc).__name__}: {exc}"
-                    ctx.warn(f"échec {what} : {exc}")
+            for stream_name in streams_needed(m, variable, stream):
+                monthly = stream_name == "monthly"
+                for kind in kinds:
+                    years = [str(init.year)] if kind == "forecast" else [str(y) for y in cfg.c3s_hindcast_years]
+                    # hindcasts: one extra lead day so that leap years (29 February)
+                    # still cover the last complete period of the horizon
+                    n_days = m.max_lead_days + (1 if kind == "hindcast" else 0)
+                    leadtime_hours = [str(h) for h in range(24, 24 * n_days + 1, 24)]
+                    what = f"{centre} sys {m.system} {kind} ({stream_name})"
+                    if monthly:
+                        dataset, request = build_c3s_monthly_request(centre, var_key, years, init.month,
+                                                                      area, system=m.system)
+                        shown = dict(request)
+                    else:
+                        dataset, request = build_c3s_request(
+                            centre, var_key, years, init.month, area,
+                            system=m.system, leadtime_hours=leadtime_hours)
+                        shown = {**request, "leadtime_hour": f"24..{24 * n_days} (pas 24 h)"}
+                    ctx.record_parameter(f"request.{centre}.{stream_name}.{kind}",
+                                         {"dataset": dataset, **shown})
+                    if dry_run:
+                        ctx.log.info("[dry-run] %s : %s", what, json.dumps(
+                            {k: v for k, v in request.items() if k != "leadtime_hour"}))
+                        continue
+                    try:
+                        path = _with_retry(
+                            lambda: download_c3s(centre, var_key, years, init.month, area, str(dest_dir),
+                                                 system=m.system, leadtime_hours=leadtime_hours, kind=kind,
+                                                 monthly=monthly),
+                            ctx.log, what)
+                        ctx.record_output(path, role=f"c3s_{variable}_{kind}", centre=centre,
+                                          system=m.system, stream=stream_name,
+                                          years=f"{years[0]}-{years[-1]}")
+                    except Exception as exc:
+                        failures[what] = f"{type(exc).__name__}: {exc}"
+                        ctx.warn(f"échec {what} : {exc}")
 
         ctx.record_parameter("failures", failures)
         ctx.log.info("terminé : %d fichier(s), %d échec(s)", len(ctx.outputs), len(failures))
@@ -130,8 +153,10 @@ def main(argv=None):
                     choices=["forecast", "hindcast"])
     ap.add_argument("--models", nargs="+", help="sous-ensemble de modèles (défaut : tous)")
     ap.add_argument("--dry-run", action="store_true", help="afficher les requêtes sans télécharger")
+    ap.add_argument("--stream", default="auto", choices=["auto", "daily", "monthly"],
+                    help="flux ; « auto » suit precip_from de la configuration")
     args = ap.parse_args(argv)
-    run(args.config, args.variable, args.kind, args.models, args.dry_run)
+    run(args.config, args.variable, args.kind, args.models, args.dry_run, args.stream)
 
 
 if __name__ == "__main__":

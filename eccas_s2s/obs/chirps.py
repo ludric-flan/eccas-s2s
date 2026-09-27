@@ -20,6 +20,8 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from eccas_s2s.io.netcdf import to_cf as cf_ready
+
 from eccas_s2s.obs.regrid import snap_coords
 
 #: daily totals above this value (mm) are reported as suspicious in the QC.
@@ -151,6 +153,8 @@ def write_totals(da: xr.DataArray, path: str | Path, attrs: dict | None = None) 
     ds = da.to_dataset()
     ds.attrs.update(attrs or {})
     enc = {"precip": {**_ENCODING, "chunksizes": (1, da.sizes["latitude"], da.sizes["longitude"])}}
+    # CF attributes on the axes, so the file opens as a lon/lat grid in CDO and QGIS
+    ds = cf_ready(ds)
     tmp = path.with_suffix(".tmp.nc")
     ds.to_netcdf(tmp, encoding=enc)
     tmp.replace(path)                       # atomic: never leave a half-written archive

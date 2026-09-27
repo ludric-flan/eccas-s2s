@@ -46,7 +46,7 @@ def test_download_dry_run_records_requests(tmp_cycle_file):
     ctx = download_c3s.run(str(tmp_cycle_file), "precip", models=["ecmwf", "dwd"], dry_run=True)
     m = json.loads((ctx.run_dir / "manifest.json").read_text())
     assert m["status"] == "success" and m["outputs"] == []
-    req = m["parameters"]["request.dwd.hindcast"]
+    req = m["parameters"]["request.dwd.daily.hindcast"]
     assert req["system"] == "22" and len(req["year"]) == 24
     assert req["leadtime_hour"] == "24..4368 (pas 24 h)"     # 181 days + 1 (leap years)
     assert req["area"] == [30.0, -10.0, -25.0, 40.0]
@@ -113,5 +113,5 @@ def test_hindcast_requests_ask_one_extra_lead_day(tmp_cycle_file):
     """Leap hindcast years (29 February) need one lead day more than the nominal horizon."""
     ctx = download_c3s.run(str(tmp_cycle_file), "tmax", models=["dwd"], dry_run=True)
     m = json.loads((ctx.run_dir / "manifest.json").read_text())["parameters"]
-    assert m["request.dwd.forecast"]["leadtime_hour"] == "24..4344 (pas 24 h)"      # 181 days
-    assert m["request.dwd.hindcast"]["leadtime_hour"] == "24..4368 (pas 24 h)"      # 182 days
+    assert m["request.dwd.daily.forecast"]["leadtime_hour"] == "24..4344 (pas 24 h)"      # 181 days
+    assert m["request.dwd.daily.hindcast"]["leadtime_hour"] == "24..4368 (pas 24 h)"      # 182 days

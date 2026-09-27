@@ -32,6 +32,22 @@ paths:
 # Échelles temporelles des produits (décision D8).
 scales: [decade, month, season]
 
+# Horizon commun à tous les modèles (décision du 23/09/2026).
+# Le produit mensuel C3S ne propose que 6 mois d'échéance pour UKMO, BoM et NCEP
+# (leadtime_month 7 refusé par le CDS, HTTP 400) : au-delà, ces trois modèles
+# n'auraient plus de mois ni de saison. On aligne donc tout le monde sur 6 mois
+# d'échéance, soit jusqu'à février 2027 et DJF pour une initialisation de
+# septembre. Une période est retenue si month_offset + n_months <= 6.
+horizon:
+  max_lead_months: 6
+
+# Sous-ensemble de travail pour le DÉVELOPPEMENT uniquement : les deux premières
+# périodes de chaque échelle, ce qui suffit à exercer toute la chaîne pour une
+# fraction du temps de calcul. En exploitation ce bloc est retiré (ou les scripts
+# sont lancés avec --all-periods) et le prévisionniste choisit ses périodes.
+development:
+  periods_per_scale: {decade: 2, month: 2, season: 2}
+
 # Variables traitées (décision D5). La V1 démarre par la pluie ; la température
 # est ajoutée en phase P1.
 variables: [precip, t2m, tmax, tmin]
@@ -68,18 +84,53 @@ systems:
     # Zone de téléchargement (lon_min, lon_max, lat_min, lat_max) : plus large
     # que le domaine des observations pour les bords du regrillage.
     download_area: [-10, 40, -25, 30]
+    # Jeu mensuel, utilisé pour les modèles à ensemble décalé (voir plus bas).
+    monthly_dataset: seasonal-monthly-single-levels
     # Systèmes valides pour une initialisation au 1er septembre 2026 (repris
     # de seasonal_engine v10). max_lead_days = horizon quotidien disponible.
+    #
+    # `precip_from` indique le flux qui alimente la PLUIE à chaque échelle
+    # (décision du 24/09/2026, après comptage des membres sur le CDS) :
+    #
+    #   modèle        quotidien (prév./hind.)   mensuel (prév./hind.)
+    #   ecmwf              51 / 25                  51 / 25      identiques
+    #   meteo_france       51 / 31                  51 / 31      identiques
+    #   dwd                50 / 30                  50 / 30      identiques
+    #   cmcc               50 / 30                  50 / 30      identiques
+    #   eccc               20 / 20                  20 / 20      identiques
+    #   ukmo                2 / 7                   62 / 28      ensemble décalé
+    #   bom                11 / 3                  121 / 27      ensemble décalé
+    #   ncep                4 / (aucun)            124 / 24      ensemble décalé
+    #
+    # UKMO, BoM et NCEP démarrent leurs membres à des jours différents du mois :
+    # le flux quotidien du 1er n'en livre qu'une poignée. Ils passent donc au
+    # mensuel pour les mois et les saisons, et gardent le quotidien pour les
+    # décades (NCEP n'a pas de hindcast quotidien : pas de décades pour lui).
     models:
-      ecmwf:        {system: "51",  label: "ECMWF SEAS5.1",      max_lead_days: 215}
-      ukmo:         {system: "610", label: "UKMO GloSea",        max_lead_days: 215}
-      meteo_france: {system: "9",   label: "Météo-France Sys 9", max_lead_days: 212}  # 215 demandés, 212 reçus
-      dwd:          {system: "22",  label: "DWD GCFS2.2",        max_lead_days: 181}  # 184 demandés, 181 reçus (→ 28 févr.)
-      cmcc:         {system: "4",   label: "CMCC SPS4",          max_lead_days: 184}
-      eccc:         {system: "5",   label: "ECCC GEM5.2-NEMO",   max_lead_days: 214}
-      bom:          {system: "2",   label: "BoM ACCESS-S2",      max_lead_days: 215}
+      ecmwf:        {system: "51",  label: "ECMWF SEAS5.1",      max_lead_days: 215,
+                     precip_from: {decade: daily, month: daily, season: daily}}
+      ukmo:         {system: "610", label: "UKMO GloSea",        max_lead_days: 215,
+                     precip_from: {decade: daily, month: monthly, season: monthly}}
+      meteo_france: {system: "9",   label: "Météo-France Sys 9", max_lead_days: 212,   # 215 demandés, 212 reçus
+                     precip_from: {decade: daily, month: daily, season: daily}}
+      dwd:          {system: "22",  label: "DWD GCFS2.2",        max_lead_days: 181,   # 184 demandés, 181 reçus (→ 28 févr.)
+                     precip_from: {decade: daily, month: daily, season: daily}}
+      cmcc:         {system: "4",   label: "CMCC SPS4",          max_lead_days: 184,
+                     precip_from: {decade: daily, month: daily, season: daily}}
+      eccc:         {system: "5",   label: "ECCC GEM5.2-NEMO",   max_lead_days: 214,
+                     precip_from: {decade: daily, month: daily, season: daily}}
+      bom:          {system: "2",   label: "BoM ACCESS-S2",      max_lead_days: 215,
+                     precip_from: {decade: daily, month: monthly, season: monthly}}
+      ncep:         {system: "2",   label: "NCEP CFSv2",         max_lead_days: 215,
+                     precip_from: {month: monthly, season: monthly}}   # pas de hindcast quotidien
   nmme:
-    enabled: true
+    # DÉSACTIVÉ le 23/09/2026 : le serveur NOAA/CPC ne sert que la moyenne
+    # d'ensemble, sans les membres, donc aucune probabilité brute n'est possible
+    # (décision D22) et la calibration seule pourrait leur en donner. Le
+    # développement de l'outil se fait sans NMME ; le code de lecture et de
+    # téléchargement est conservé pour y revenir dès qu'une source fournissant
+    # les membres (IRIDL, archives des centres) aura été identifiée.
+    enabled: false
     # Source : serveur NOAA/CPC (fichiers servis à CPT), un dossier par mois
     # d'initialisation, une moyenne d'ensemble (ENSMEAN) par modèle, variable et
     # année. Les membres individuels ne sont pas fournis. Mensuel uniquement :

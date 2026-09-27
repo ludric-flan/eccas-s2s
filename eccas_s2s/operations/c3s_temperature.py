@@ -29,7 +29,9 @@ import pandas as pd
 
 from eccas_s2s.core.daily import aggregate_periods
 from eccas_s2s.core.monthly import aggregate_monthly
-from eccas_s2s.core.periods import build_periods
+from eccas_s2s.core.periods import (add_period_arguments, announce_subset,
+                                    selected_periods)
+from eccas_s2s.io.netcdf import save as save_cf
 from eccas_s2s.io.c3s_read import load_c3s_daily_last24h, load_c3s_monthly
 from eccas_s2s.operations.c3s_totals import derived_dir, totals_path
 from eccas_s2s.provenance import RunContext
@@ -46,7 +48,7 @@ def _raw(cfg, centre, key, kind, monthly):
     return hits[-1] if hits else None
 
 
-def run(config: str, variables=None, models=None):
+def run(config: str, variables=None, models=None, selection=None):
     cfg = load_cycle(config)
     variables = list(variables) if variables else list(VARIABLES)
     selected = list(models) if models else list(cfg.c3s_models)
@@ -55,6 +57,7 @@ def run(config: str, variables=None, models=None):
     out_dir.mkdir(parents=True, exist_ok=True)
 
     with RunContext(cfg, step="c3s_temperature") as ctx:
+        announce_subset(cfg, ctx, selection)
         summary = []
         for var in variables:
             key, monthly = VARIABLES[var]
@@ -70,11 +73,13 @@ def run(config: str, variables=None, models=None):
                         data = load_c3s_monthly(src, "t2m", init_month=init.month).load()
                         n_months = int(data["month_offset"].max()) + 1
                         horizon = ((init + pd.DateOffset(months=n_months)) - init).days
-                        periods = build_periods(init, horizon, scales=("month", "season"))
+                        periods = cfg.periods_for(horizon, ("month", "season"),
+                                                  selection=selection)
                         vals = aggregate_monthly(data, periods, how="mean")
                     else:
                         data = load_c3s_daily_last24h(src).load()
-                        periods = build_periods(init, m.max_lead_days, cfg.scales)
+                        periods = cfg.periods_for(m.max_lead_days, cfg.scales,
+                                                  selection=selection)
                         vals = aggregate_periods(data, periods, how="mean")
                     vals = vals.transpose("year", "number", "period", "latitude", "longitude").astype("float32")
                     vals = vals.assign_coords(label=("period", [p.label(init.year) for p in periods]))
@@ -89,10 +94,8 @@ def run(config: str, variables=None, models=None):
                         ctx.warn(f"{var} {centre} {kind} : {holes} couple(s) (année, période) sans valeur")
                     ds = vals.to_dataset()
                     ds.attrs.update({**ctx.netcdf_attrs(), "source_file": str(src.resolve())})
-                    path = totals_path(cfg, centre, kind, var)
-                    tmp = path.with_suffix(".tmp.nc")
-                    ds.to_netcdf(tmp, encoding={var: {"zlib": True, "complevel": 4}})
-                    tmp.replace(path)
+                    path = save_cf(ds, totals_path(cfg, centre, kind, var),
+                                   init_year=init.year, init_month=init.month)
                     ctx.record_output(path, role=f"c3s_{var}_{kind}", centre=centre)
                     n_mem = vals.notnull().any(["period", "latitude", "longitude"]).sum("number")
                     summary.append({"variable": var, "centre": centre, "kind": kind,
@@ -119,8 +122,9 @@ def main(argv=None):
     ap.add_argument("--config", required=True)
     ap.add_argument("--variables", nargs="+", choices=sorted(VARIABLES))
     ap.add_argument("--models", nargs="+")
+    add_period_arguments(ap)
     args = ap.parse_args(argv)
-    run(args.config, args.variables, args.models)
+    run(args.config, args.variables, args.models, selection=selected_periods(args))
 
 
 if __name__ == "__main__":

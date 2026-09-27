@@ -20,10 +20,14 @@ categories:
 
 precip:
   # Seuils absolus de cumul (mm) pour les cartes de dépassement.
+  # Seuils arrêtés le 23/09/2026 après examen de la distribution observée
+  # CHIRPS 1981–2026 sur le masque CEEAC (médianes : 27 mm par décade, 93 mm par
+  # mois, 313 mm par saison). Les seuils précédents comportaient des événements
+  # sans contenu : « ≥ 50 mm sur une saison » est vrai 75 % du temps.
   exceedance_mm:
-    decade: [5, 10, 20, 50, 100]
-    month:  [10, 20, 50, 100, 200, 300]
-    season: [50, 100, 200, 300, 400, 500, 600]
+    decade: [50, 75, 100]      # fortes pluies décadaires (32 %, 12 %, 4 % du temps)
+    month:  [100, 200, 300]    # autour de la médiane puis fortes pluies (48 %, 17 %, 2 %)
+    season: [300, 500, 600]    # médiane, saison humide, très humide (51 %, 25 %, 12 %)
   # Seuil d'anomalie (mm) pour le produit « anomalie seuil ».
   anomaly_mm: {decade: 15, month: 30, season: 60}
   # Masque de saison sèche appliqué aux produits (décision du 19/09/2026).

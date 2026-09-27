@@ -35,6 +35,7 @@ import xarray as xr
 from eccas_s2s.obs.chirps import expand_paths, open_chirps_daily, process_daily, write_totals
 from eccas_s2s.obs.climatology import normals
 from eccas_s2s.obs.regrid import block_average, snap_coords
+from eccas_s2s.io.netcdf import save as save_cf
 from eccas_s2s.provenance import RunContext
 from eccas_s2s.settings import load_cycle
 
@@ -166,10 +167,7 @@ def run(config: str, rebuild: bool = False) -> RunContext:
                 norm = normals(dk, mo, (n0, n1), thr["percentiles"], thr["percentile_method"],
                                thr["min_years_normal"])
                 norm.attrs.update(common)
-                enc = {v: {"zlib": True, "complevel": 4} for v in norm.data_vars}
-                tmp = target.with_suffix(".tmp.nc")
-                norm.to_netcdf(tmp, encoding=enc)
-                tmp.replace(target)
+                save_cf(norm, target)
 
         qc = pd.read_csv(paths["qc"])
         bad = qc[(qc.days_present != qc.days_expected) | (qc.missing_land_values > 0)

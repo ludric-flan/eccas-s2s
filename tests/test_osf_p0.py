@@ -224,3 +224,55 @@ def test_agro_feasibility_september_init():
     for name, p in products.items():
         rec = pd.Timestamp(2026, p.recommended_init, 1)
         assert feasibility(p, rec, 215)["status"] == FEASIBLE, name
+
+
+def test_netcdf_files_are_readable_by_other_tools(tmp_path):
+    """
+    A period is a window of the calendar, so it is written as a CF time axis.
+
+    A string dimension makes CDO refuse the whole file ("Unsupported file
+    structure") and ncview report "unknown data type (12)". The chain therefore
+    writes an integer/time axis with the keys kept beside it, and reads its own
+    files back through `from_cf`, so nothing internal changes.
+    """
+    import numpy as np
+    import xarray as xr
+
+    from eccas_s2s.io.netcdf import open_cf, save
+
+    lat, lon = np.linspace(-4, 4, 5), np.linspace(10, 15, 6)
+    periods = ["season_m0", "month_m1", "decade_m0_d2"]
+    ds = xr.Dataset({
+        "rpss": xr.DataArray(np.random.default_rng(0).random((3, 5, 6)),
+                             dims=("period", "latitude", "longitude"),
+                             coords={"period": periods, "latitude": lat, "longitude": lon}),
+        "roc_area": xr.DataArray(np.random.default_rng(1).random((3, 3, 5, 6)),
+                                 dims=("period", "category", "latitude", "longitude"),
+                                 coords={"period": periods, "category": ["BN", "NN", "AN"],
+                                         "latitude": lat, "longitude": lon})})
+    ds = ds.assign_coords(label=("period", ["SON 2026", "2026-10", "2026-09-D2"]),
+                          scale=("period", ["season", "month", "decade"]))
+    path = save(ds, tmp_path / "scores.nc", init_year=2026, init_month=9)
+
+    raw = xr.open_dataset(path)
+    # aucune dimension de type chaîne, et un axe temps daté
+    assert all(raw[d].dtype.kind not in ("U", "O") for d in raw.dims if d in raw.coords)
+    assert "time" in raw.dims and str(raw["time"].values[0])[:10] == "2026-09-01"
+    assert raw["time"].attrs["standard_name"] == "time"
+    assert list(raw["time_bnds"].values[0].astype("datetime64[D]").astype(str)) == \
+        ["2026-09-01", "2026-12-01"]                      # SON, borne haute exclue
+    assert raw["category"].attrs["flag_meanings"] == "BN NN AN"
+    assert raw["latitude"].attrs["units"] == "degrees_north"
+    assert "_FillValue" not in raw["latitude"].encoding or \
+        raw["latitude"].encoding.get("_FillValue") is None
+    # aucune variable texte : CDO lit mal un tableau de caractères porté par
+    # l'axe du temps ; les libellés voyagent donc en attributs globaux
+    assert all(v.dtype.kind not in ("U", "O", "S") for v in raw.variables.values())
+    assert raw.attrs["period_key"] == "season_m0 | month_m1 | decade_m0_d2"
+    assert raw.attrs["label"].startswith("SON 2026 |")
+
+    # la chaîne retrouve sa vue habituelle
+    back = open_cf(path)
+    assert list(back["period"].values) == periods
+    assert list(back["category"].values) == ["BN", "NN", "AN"]
+    assert float(back["roc_area"].sel(period="month_m1", category="AN").mean()) > 0

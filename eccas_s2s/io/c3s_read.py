@@ -8,6 +8,8 @@ every opening; with it, only the first opening is slow.
 """
 from __future__ import annotations
 
+import calendar
+
 import os
 from pathlib import Path
 
@@ -69,9 +71,19 @@ def load_c3s_monthly(path: str | Path, var: str = "t2m", init_month: int | None 
     value is stamped at the **end** of its month (valid_time = first day of the
     next month); the target month is recovered from it.
 
-    Lagged ensembles (UKMO, BoM: several start dates before the 1st) are merged:
-    every start date is attached to its nominal 1st-of-month initialisation and
-    all its members are stacked in ``number``. Temperatures are converted to °C.
+    Lagged ensembles (UKMO, BoM, NCEP: several start dates before the 1st) are
+    merged: every start date is attached to its nominal 1st-of-month
+    initialisation and all its members are stacked in ``number``.
+
+    Units are converted to the ones the chain works in:
+
+    * temperatures to °C;
+    * ``tprate`` — a **mean rate** in m/s over the target month — to a total in
+      millimetres, using the **true length of that month**:
+      ``mm = tprate × 1000 × 86400 × n_days(year, month)``. Multiplying by a
+      fixed 30 days, as some chains do, would under-count a 31-day month by 3 %
+      and over-count February by 7 % (10 % in a leap year), and the totals would
+      no longer line up with those computed from the daily stream.
     """
     ds = open_c3s_grib(path)
     da = ds[var]
@@ -118,10 +130,33 @@ def load_c3s_monthly(path: str | Path, var: str = "t2m", init_month: int | None 
     if var in ("t2m", "mx2t24", "mn2t24"):
         out = out - 273.15
         out.attrs = {"units": "degC"}
+    elif var == "tprate":
+        out = out * (1000.0 * 86400.0) * month_lengths(years, int(nominal[0].month),
+                                                       out["month_offset"].values)
+        out.attrs = {"units": "mm", "conversion": "tprate (m/s) x 86400 x 1000 x jours du mois"}
     out.attrs.update({"source_file": str(Path(path).resolve()),
                       "n_start_dates": int(len(starts)), "lagged_ensemble": bool((starts.day != 1).any())})
     out.name = var
     return out.transpose("year", "number", "month_offset", "latitude", "longitude")
+
+
+def month_lengths(years, init_month: int, offsets) -> xr.DataArray:
+    """
+    Number of days of each target month, per hindcast year and month offset.
+
+    ``offset`` 0 is the initialisation month. February is 28 or 29 days
+    depending on the year, which is precisely why this is a table and not a
+    constant.
+    """
+    values = [[calendar.monthrange(*_shift_month(int(y), init_month, int(k)))[1]
+               for k in offsets] for y in years]
+    return xr.DataArray(values, dims=("year", "month_offset"),
+                        coords={"year": list(years), "month_offset": list(offsets)})
+
+
+def _shift_month(year: int, month: int, offset: int) -> tuple[int, int]:
+    idx = (month - 1) + offset
+    return year + idx // 12, idx % 12 + 1
 
 
 def load_c3s_daily_last24h(path: str | Path) -> xr.DataArray:

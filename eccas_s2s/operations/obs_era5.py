@@ -32,6 +32,7 @@ import xarray as xr
 from eccas_s2s.obs.era5 import VARIABLES, expand_paths, open_era5_daily, process_daily
 from eccas_s2s.obs.regrid import conservative_to_degree, snap_coords
 from eccas_s2s.obs.climatology import normals
+from eccas_s2s.io.netcdf import save as save_cf
 from eccas_s2s.provenance import RunContext
 from eccas_s2s.settings import load_cycle
 
@@ -91,12 +92,7 @@ def load_normals(cfg, variable: str, resolution: str = "0p25") -> xr.Dataset:
 def _write(ds: xr.Dataset, path: Path, attrs: dict) -> Path:
     ds = ds.copy()
     ds.attrs.update(attrs)
-    enc = {v: {"zlib": True, "complevel": 4} for v in ds.data_vars}
-    tmp = path.with_suffix(".tmp.nc")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    ds.to_netcdf(tmp, encoding=enc)
-    tmp.replace(path)
-    return path
+    return save_cf(ds, path)
 
 
 def run(config: str, rebuild: bool = False) -> RunContext:

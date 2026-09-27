@@ -35,6 +35,17 @@ class C3SModel:
     system: str
     label: str
     max_lead_days: int
+    #: which stream feeds the rainfall of each scale ("daily" or "monthly").
+    #: A scale absent from the mapping is not produced for this model — NCEP has
+    #: no daily hindcast, so it has no dekads.
+    precip_from: dict = field(default_factory=lambda: {"decade": "daily", "month": "daily",
+                                                       "season": "daily"})
+
+    def stream_for(self, scale: str, variable: str = "precip") -> str | None:
+        """Stream to read for a scale, or None when the model does not cover it."""
+        if variable != "precip":
+            return "daily" if scale == "decade" else "monthly"
+        return self.precip_from.get(scale)
 
 
 @dataclass(frozen=True)
@@ -84,6 +95,43 @@ class CycleConfig:
     def variables(self) -> list[str]:
         return list(self.raw["variables"])
 
+    @property
+    def max_lead_months(self) -> int | None:
+        """Lead months every model must be able to honour (None = no cap)."""
+        value = (self.raw.get("horizon") or {}).get("max_lead_months")
+        return int(value) if value is not None else None
+
+    @property
+    def periods_per_scale(self) -> dict:
+        """Development subset: first *n* periods of each scale ({} = all of them)."""
+        return dict((self.raw.get("development") or {}).get("periods_per_scale") or {})
+
+    def periods_for(self, horizon_days: int, scales=None, selection=None,
+                    full: bool = False) -> list:
+        """
+        Target periods of one model, after the horizon and what was asked for.
+
+        Every step builds its periods through this method, so the horizon
+        (6 lead months, the limit of the monthly archive) and the choice of
+        periods are decided in **one** place instead of being repeated, and
+        possibly diverging, in each operation.
+
+        ``selection`` is what an **operational** run asks for — ``"all"``,
+        ``"all-months"``, ``"all-seasons"``, ``"all-decades"``, a period key
+        (``"season_m1"``) or the label printed on the maps (``"OND 2026"``), one
+        or several at a time. When it is given, the development subset of the
+        configuration does not apply. ``full=True`` is the shorthand for
+        ``selection="all"``.
+        """
+        from eccas_s2s.core.periods import ALL, build_periods, select_periods
+
+        periods = build_periods(self.init_date, horizon_days, tuple(scales or self.scales))
+        if full and not selection:
+            selection = ALL
+        return select_periods(periods, max_lead_months=self.max_lead_months,
+                              per_scale=self.periods_per_scale, selection=selection,
+                              init_year=self.init_date.year)
+
     def reference_period(self, key: str) -> tuple[int, int]:
         start, end = self.raw["reference_periods"][key]
         return int(start), int(end)
@@ -93,12 +141,28 @@ class CycleConfig:
         return self.raw["cross_validation"]["scheme"]
 
     # ---- systems ----------------------------------------------------------
+    def enabled_systems(self) -> list[str]:
+        """
+        Forecast systems the cycle actually uses.
+
+        A system is switched off in the configuration rather than deleted from
+        it: NMME is disabled since 23/09/2026 (no members on the available
+        server), and turning it back on is a one-line change once a source with
+        members is found.
+        """
+        systems = self.raw.get("systems", {})
+        return [name for name, spec in systems.items()
+                if isinstance(spec, dict) and spec.get("enabled", True)]
+
     @property
     def c3s_models(self) -> dict[str, C3SModel]:
         models = self.raw["systems"]["c3s"]["models"]
         return {
             centre: C3SModel(centre=centre, system=str(spec["system"]),
-                             label=spec["label"], max_lead_days=int(spec["max_lead_days"]))
+                             label=spec["label"], max_lead_days=int(spec["max_lead_days"]),
+                             precip_from=dict(spec.get("precip_from",
+                                                       {"decade": "daily", "month": "daily",
+                                                        "season": "daily"})))
             for centre, spec in models.items()
         }
 
