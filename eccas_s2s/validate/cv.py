@@ -25,7 +25,9 @@ def loyo_mean(da: xr.DataArray, dims=None, year_dim: str = YEAR) -> xr.DataArray
     With ``n`` years, the leave-one-out mean is ``(n * mean - year) / (n - 1)``,
     computed in one pass instead of ``n`` passes.
     """
-    dims = list(dims or [d for d in da.dims if d != year_dim])
+    # an explicit empty list means "the years only": `or` would have read it as
+    # "no argument given" and silently averaged the whole grid away
+    dims = list(dims) if dims is not None else [d for d in da.dims if d != year_dim]
     others = [d for d in dims if d != year_dim]
     per_year = da.mean(others) if others else da
     n = per_year.sizes[year_dim]

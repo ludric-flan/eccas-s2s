@@ -351,3 +351,41 @@ def test_a_family_diagram_uses_one_method_for_all_its_classes():
     assert family_method(pd.DataFrame(), **base, products=products["terciles"]) == ""
     assert family_method(register, **{**base, "model": "dwd"},
                          products=products["terciles"]) == ""
+
+
+def test_the_loyo_intercept_does_not_punish_a_fitted_method():
+    """
+    Une prévision ajustée sans l'année vérifiée porte la moyenne d'apprentissage,
+    qui est anticorrélée à cette année par construction. Sans référence commune,
+    la méthode la plus faible est pénalisée deux fois — et le brut, qui n'ajuste
+    rien, en sort artificiellement gagnant.
+    """
+    import numpy as np
+    import xarray as xr
+
+    from eccas_s2s.validate.cv import loyo_mean
+    from eccas_s2s.validate.scores import deterministic_scores
+
+    rng = np.random.default_rng(5)
+    years = list(range(1993, 2017))
+    coords = {"year": years, "latitude": [0.0, 1.0], "longitude": [10.0, 11.0]}
+    obs = xr.DataArray(rng.normal(200, 40, (len(years), 2, 2)),
+                       dims=("year", "latitude", "longitude"), coords=coords)
+
+    # une prévision sans aucune information : uniquement la moyenne d'apprentissage
+    clim = loyo_mean(obs, dims=[])
+    sans_info = clim
+
+    brut = float(deterministic_scores(sans_info, obs)["acc"].median())
+    corrige = float(deterministic_scores(sans_info, obs, climatology=clim)["acc"].median())
+    assert brut < -0.9                       # artefact : anticorrélation parfaite
+    assert abs(corrige) < 1e-6 or np.isnan(corrige)   # sans information : aucun score
+
+    # une prévision qui porte du signal garde son score, à l'artefact près
+    signal = obs + rng.normal(0, 30, obs.shape)
+    ajustee = 0.5 * signal + 0.5 * clim
+    assert (float(deterministic_scores(ajustee, obs, climatology=clim)["acc"].median())
+            > float(deterministic_scores(ajustee, obs)["acc"].median()))
+
+    # loyo_mean avec une liste vide ne doit pas moyenner l'espace
+    assert set(loyo_mean(obs, dims=[]).dims) == {"year", "latitude", "longitude"}

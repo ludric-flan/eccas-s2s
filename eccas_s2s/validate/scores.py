@@ -43,7 +43,8 @@ def _rank_along_year(da: xr.DataArray, year_dim: str) -> xr.DataArray:
 
 
 def deterministic_scores(forecast: xr.DataArray, obs: xr.DataArray,
-                         year_dim: str = YEAR) -> xr.Dataset:
+                         year_dim: str = YEAR, climatology: xr.DataArray | None = None
+                         ) -> xr.Dataset:
     """
     Bias, MAE, RMSE, MSESS, Pearson, Spearman and ACC per grid point.
 
@@ -51,6 +52,17 @@ def deterministic_scores(forecast: xr.DataArray, obs: xr.DataArray,
     anomalies relative to the mean of the verification sample, so for a single
     period it is identical to the Pearson correlation; both are kept because
     the Draft Framework lists them separately.
+
+    ``climatology`` is the reference the anomalies are taken from, and passing
+    the **leave-one-year-out climatology** removes an artefact that would
+    otherwise punish the weakest methods twice. A prediction fitted without year
+    *i* carries the training mean, ``(S − y_i)/(n − 1)``, which is perfectly
+    anticorrelated with ``y_i`` by construction: the more a method relies on that
+    intercept — that is, the less signal it has — the more negative its
+    correlation becomes on its own. Measured on a regression with no skill, the
+    ACC read −0.37 instead of −0.10. With both sides referred to the same LOYO
+    climatology the artefact disappears, and a method with no information scores
+    around zero, as it should.
     """
     valid = forecast.notnull() & obs.notnull()
     f = forecast.where(valid)
@@ -61,11 +73,11 @@ def deterministic_scores(forecast: xr.DataArray, obs: xr.DataArray,
     bias = err.mean(year_dim)
     mae = abs(err).mean(year_dim)
     mse = (err ** 2).mean(year_dim)
-    o_mean = o.mean(year_dim)
-    mse_clim = ((o - o_mean) ** 2).mean(year_dim)
+    reference = o.mean(year_dim) if climatology is None else climatology.where(valid)
+    mse_clim = ((o - reference) ** 2).mean(year_dim)
 
-    fa = f - f.mean(year_dim)
-    oa = o - o_mean
+    fa = f - (f.mean(year_dim) if climatology is None else reference)
+    oa = o - reference
     denom = np.sqrt((fa ** 2).sum(year_dim) * (oa ** 2).sum(year_dim))
     pearson = (fa * oa).sum(year_dim) / denom.where(denom > 0)
 

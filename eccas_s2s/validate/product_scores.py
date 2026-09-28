@@ -37,7 +37,7 @@ import xarray as xr
 
 from eccas_s2s.products.catalogue import CATEGORIES, EVENT, VALUE, catalogue
 from eccas_s2s.products.raw_products import SPI_CLASS_BOUND, cumul_to_spi, fit_gamma
-from eccas_s2s.validate.cv import loyo_quantile
+from eccas_s2s.validate.cv import loyo_mean, loyo_quantile
 from eccas_s2s.validate.pairs import observed_categories
 from eccas_s2s.validate.scores import brier_scores, deterministic_scores, groc, roc_area, rps_scores
 
@@ -189,6 +189,15 @@ class ObservationContext:
     depend on the observation alone — not on the forecast being scored. Ten
     calibration methods share one context, which is what makes scoring the whole
     catalogue affordable (the SPI alone is 24 gamma fits per period).
+
+    The **leave-one-year-out climatology** lives here too, and it is not a
+    detail: a forecast fitted without year *i* carries the training mean, which
+    is perfectly anticorrelated with the value of that year. A method that relies
+    on that mean — that is, a method with little signal — is therefore punished
+    twice, while the raw forecast, which fits nothing, is untouched. Referring
+    both sides of a value product to the same LOYO climatology removes the
+    artefact; without it, "no method beats the raw anomaly" is a conclusion about
+    the metric, not about the methods.
     """
 
     def __init__(self, obs: xr.DataArray, variable: str, scale: str, thresholds: dict,
@@ -200,6 +209,9 @@ class ObservationContext:
         self.q33 = obs_q.sel(quantile=TERCILES[0], drop=True)
         self.q67 = obs_q.sel(quantile=TERCILES[1], drop=True)
         self.products = catalogue(variable, scale, thresholds)
+        # climatology of each year fitted without that year: the reference the
+        # anomalies of a value product are taken from, on both sides
+        self.climatology = loyo_mean(obs, dims=[], year_dim=year_dim)
         self.events = {p.name: _event_threshold(p, obs, self.q33, self.q67, year_dim)
                        for p in self.products if p.kind == EVENT}
         self._spi = None
@@ -326,10 +338,13 @@ def product_maps(dist, ctx: ObservationContext, mode: str = "deciding",
         if product.kind == VALUE:
             forecast, reference = _value_pair(dist, ctx, product, cache)
             if product.name in ("cumul", "anomalie"):
-                det = det if det is not None else deterministic_scores(forecast, reference, year_dim)
+                det = det if det is not None else deterministic_scores(
+                    forecast, reference, year_dim, climatology=ctx.climatology)
                 scores = det
             else:                                     # SPI: scored on the SPI scale
-                scores = deterministic_scores(forecast, reference, year_dim)
+                scores = deterministic_scores(forecast, reference, year_dim,
+                                              climatology=loyo_mean(reference, dims=[],
+                                                                    year_dim=year_dim))
             fields = {m: scores[m] for m in metrics if m in scores}
             n_years = scores["n_years"]
 
