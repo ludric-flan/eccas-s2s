@@ -35,6 +35,9 @@ C3S_VARIABLES = {
     "TEMP": "2m_temperature",
     "TMAX": "maximum_2m_temperature_in_the_last_24_hours",
     "TMIN": "minimum_2m_temperature_in_the_last_24_hours",
+    # predictor of the downscaling (E3/E7): the ocean state the model forecasts
+    # for the target season, from which the drivers are recomputed
+    "SST": "sea_surface_temperature",
 }
 
 #: dataset of monthly statistics (used for the 2 m mean temperature, months/seasons only).
