@@ -440,7 +440,101 @@ def clip_to_shapefile(artist, ax, shapefile):
     patch = PathPatch(MplPath(vertices, codes), transform=ccrs.PlateCarree()._as_mpl_transform(ax),
                       facecolor="none", edgecolor="none")
     ax.add_patch(patch)
-    artist.set_clip_path(patch)
+    # a mesh clips itself; a set of filled contours is a container of collections
+    # in the matplotlib versions the chain runs on, and each one is clipped
+    if hasattr(artist, "set_clip_path"):
+        artist.set_clip_path(patch)
+    else:
+        for collection in getattr(artist, "collections", []):
+            collection.set_clip_path(patch)
+
+
+def _cell_edges(centres: np.ndarray) -> np.ndarray:
+    """Cell boundaries of a regular axis, from its centres."""
+    centres = np.asarray(centres, dtype=float)
+    if centres.size == 1:
+        return np.array([centres[0] - 0.5, centres[0] + 0.5])
+    middles = 0.5 * (centres[:-1] + centres[1:])
+    return np.concatenate([[centres[0] - (middles[0] - centres[0])], middles,
+                           [centres[-1] + (centres[-1] - middles[-1])]])
+
+
+def cells_path(lons, lats, mask: np.ndarray):
+    """
+    Compound path covering exactly the cells where ``mask`` is true.
+
+    Used to clip a smoothed mesh to the cells that belong to one category: the
+    shading is continuous **inside** the patch, and the patch stops exactly on
+    the cell edges, so no colour ever crosses into a neighbouring category.
+    """
+    from matplotlib.path import Path as MplPath
+
+    x = _cell_edges(np.asarray(lons))
+    y = _cell_edges(np.asarray(lats))
+    verts, codes = [], []
+    for j, i in zip(*np.nonzero(mask)):
+        x0, x1, y0, y1 = x[i], x[i + 1], y[j], y[j + 1]
+        verts += [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]
+        codes += [MplPath.MOVETO, MplPath.LINETO, MplPath.LINETO, MplPath.LINETO,
+                  MplPath.CLOSEPOLY]
+    return MplPath(verts, codes) if verts else None
+
+
+def _mono_fontsize(text: str, width_inches: float, base: float = 8.4,
+                   floor: float = 5.2) -> float:
+    """
+    Largest monospaced size at which the longest line still fits the figure.
+
+    The caption of a skill-weighted map holds one column per model, and the
+    columns must stay under the names they belong to. Wrapping would break that,
+    so the font shrinks instead — down to a floor below which nothing is
+    readable anyway.
+    """
+    longest = max((len(line) for line in text.splitlines()), default=0)
+    if longest == 0:
+        return base
+    # a monospaced glyph is about 0.6 em wide; 72 points to the inch
+    return max(floor, min(base, width_inches * 72.0 / (0.6 * longest)))
+
+
+def _layout(extent, title: str, subtitle: str, caption: str, map_width: float,
+            shapefile=None, wrap_caption: bool = True) -> dict:
+    """
+    Figure and axes of a single map, sized from the domain and the texts.
+
+    Shared by the score maps and the product maps so that a skill map and the
+    product it describes come out of the chain the same size, with the same
+    margins and the same place for the title, the colour bar and the caption. A
+    fixed figure size cannot do that: the CEEAC is taller than it is wide, and a
+    three-line title pushed the subtitle over the map frame.
+    """
+    import cartopy.crs as ccrs
+
+    lon_span, lat_span = extent[1] - extent[0], extent[3] - extent[2]
+    ax_w = float(map_width)
+    ax_h = ax_w * lat_span / lon_span
+    # the header lines are long by design (product, forecast, weighting): they
+    # are wrapped wide enough not to break a product name in two
+    title_text = _wrap(title, 70) if title else ""
+    sub_text = _wrap(subtitle, 62) if subtitle else ""
+    # a caption whose columns are aligned by hand must not be re-wrapped
+    caption_text = (_wrap(caption, 92) if wrap_caption else caption) if caption else ""
+    n_title = title_text.count("\n") + 1 if title_text else 0
+    n_sub = sub_text.count("\n") + 1 if sub_text else 0
+    n_caption = caption_text.count("\n") + 1 if caption_text else 0
+    left, right = 0.75, 1.70
+    foot = 0.62 + 0.17 * n_caption
+    head = 0.22 + 0.27 * n_title + 0.26 * n_sub + 0.16
+    fig_w, fig_h = left + ax_w + right, head + ax_h + foot
+    fig = plt.figure(figsize=(fig_w, fig_h))
+    ax = fig.add_axes([left / fig_w, foot / fig_h, ax_w / fig_w, ax_h / fig_h],
+                      projection=ccrs.PlateCarree())
+    setup_ax(ax, extent, shapefile, left_labels=True, right_labels=False,
+             bottom_labels=True)
+    return {"fig": fig, "ax": ax, "fig_w": fig_w, "fig_h": fig_h, "left": left,
+            "ax_w": ax_w, "ax_h": ax_h, "foot": foot, "title": title_text,
+            "subtitle": sub_text, "caption": caption_text, "n_title": n_title,
+            "centre": (left + ax_w / 2) / fig_w}
 
 
 def map_score(field, *, metric: str, variable: str = "precip", shapefile=None, logo=None,
@@ -463,30 +557,13 @@ def map_score(field, *, metric: str, variable: str = "precip", shapefile=None, l
     style = style_of(metric, variable) if style is None else style
     cmap, norm, extend = _discrete(style, field)
 
-    # inches: the axes box follows the aspect of the domain, the margins hold
-    # the title, the caption and the colour bar.
-    lon_span, lat_span = extent[1] - extent[0], extent[3] - extent[2]
-    ax_w = float(map_width)
-    ax_h = ax_w * lat_span / lon_span
-    # the header grows with the number of title and subtitle lines: a three-line
-    # title used to push the subtitle over the map frame.
-    title_text = _wrap(title, 52) if title else ""
-    sub_text = _wrap(subtitle, 62) if subtitle else ""
-    n_title = title_text.count("\n") + 1 if title_text else 0
-    n_sub = sub_text.count("\n") + 1 if sub_text else 0
-    # the caption is wrapped before the figure is sized: a four-line condition
-    # under a map used to be cut off by the bottom edge
     caption_text = style.get("caption", "") if caption is None else caption
-    caption_text = _wrap(caption_text, 92) if caption_text else ""
-    n_caption = caption_text.count("\n") + 1 if caption_text else 0
-    left, right = 0.75, 1.70
-    foot = 0.62 + 0.17 * n_caption
-    head = 0.22 + 0.27 * n_title + 0.26 * n_sub + 0.16
-    fig_w, fig_h = left + ax_w + right, head + ax_h + foot
-    fig = plt.figure(figsize=(fig_w, fig_h))
-    ax = fig.add_axes([left / fig_w, foot / fig_h, ax_w / fig_w, ax_h / fig_h],
-                      projection=ccrs.PlateCarree())
-    setup_ax(ax, extent, shapefile, left_labels=True, right_labels=False, bottom_labels=True)
+    box = _layout(extent, title, subtitle, caption_text, map_width, shapefile)
+    fig, ax = box["fig"], box["ax"]
+    fig_w, fig_h, left, ax_w, ax_h, foot = (box["fig_w"], box["fig_h"], box["left"],
+                                            box["ax_w"], box["ax_h"], box["foot"])
+    title_text, sub_text, caption_text = box["title"], box["subtitle"], box["caption"]
+    n_title = box["n_title"]
     # smoothed across the pixels (Gouraud): a score varies continuously in space,
     # and a blocky map reads as if each cell were an independent measurement
     values = _nearest_filled(field) if shading == "gouraud" else field.values
@@ -529,3 +606,428 @@ def _wrap(text: str, width: int) -> str:
 
     return "\n".join("\n".join(textwrap.wrap(line, width)) or line
                      for line in str(text).split("\n"))
+
+
+# --------------------------------------------------------------- produits RCC
+#: palettes de l'annexe du Draft Framework : six classes de probabilité, bornes
+#: 40-50, 50-60, 60-70, 70-80, 80-90 et **90-100 %**. Une couleur vaut un
+#: intervalle, jamais une valeur isolée — une probabilité est continue, et un
+#: pas de 10 points est ce qu'un utilisateur peut distinguer sur une carte.
+RCC_BINS = [40, 50, 60, 70, 80, 90, 100]
+RCC_TERCILE_COLORS = {
+    "precip": {
+        "BN": ["#FFB52E", "#FF9800", "#FF7A00", "#FF5500", "#FF3000", "#FF0000"],
+        "NN": ["#E6FFFF", "#BFF9F5", "#8FEFEA", "#5DDFD8", "#2ACCC5", "#00B8B0"],
+        "AN": ["#C7F0AA", "#39C00F", "#39AB06", "#157A40", "#0E5C30", "#093F21"],
+    },
+    "temperature": {
+        "BN": ["#E6F2FF", "#B3D9FF", "#66B2FF", "#1A75CF", "#004C99", "#00336B"],
+        "NN": ["#E6FFFF", "#BFF9F5", "#8FEFEA", "#5DDFD8", "#2ACCC5", "#00B8B0"],
+        "AN": ["#FFE400", "#FFCC00", "#FF8800", "#FF6600", "#FF0000", "#B20000"],
+    },
+}
+#: wording of the bulletins, and the meaning of each category for rainfall
+RCC_CATEGORY_LABEL = {"BN": "Below Normal", "NN": "Near Normal", "AN": "Above Normal"}
+#: no category reaches the first class: nothing to say, and the map says so
+NO_DOMINANT_COLOR = "#FFFFFF"
+DRY_COLOR = "#C0C0C0"
+
+
+def _ramp(name: str, n: int = 6, lo: float = 0.22, hi: float = 0.95) -> list:
+    """Discrete ramp of ``n`` colours taken from a matplotlib colormap."""
+    from matplotlib.colors import to_hex
+
+    return [to_hex(plt.get_cmap(name)(x)) for x in np.linspace(lo, hi, n)]
+
+
+#: SPI classes, with the colours of the reference chain: dry in oranges, normal
+#: in greens, wet in blues — the same dominant-class reading as the terciles
+SPI_CLASS_COLORS = {"BN": _ramp("Oranges"), "NN": _ramp("Greens"), "AN": _ramp("Blues")}
+SPI_CLASS_LABEL = {"BN": "SPI sec (< −1)", "NN": "SPI normal", "AN": "SPI humide (> +1)"}
+
+
+def map_tercile_forecast(prob, *, variable="precip", shapefile=None, logo=None,
+                         extent=DEFAULT_EXTENT, title="", subtitle="", output_path=None,
+                         dry_mask=None, map_width: float = 5.4, category_dim="category",
+                         palette=None, category_labels=None, caption=None,
+                         caption_mono: bool = False):
+    """
+    The tercile forecast map of the bulletins: one dominant category per cell.
+
+    Each cell takes the category with the highest probability and its colour from
+    that category's ramp, cut at the classes of the Draft annex. A cell whose
+    strongest category stays under 40 % is left **white**: with three categories
+    the climatological value is 33 %, so below 40 % the forecast says nothing a
+    user could act on, and colouring it would suggest otherwise. The dry mask is
+    drawn in sand, as in the reference chain — a probability of rainfall category
+    means little where the season brings less than a millimetre.
+
+    The three ramps are shown as three separate colour bars, because they are
+    three different quantities: a reader must never compare an orange 60 % with a
+    green 60 % on one scale.
+    """
+    import cartopy.crs as ccrs
+    from matplotlib.colors import BoundaryNorm, ListedColormap
+    from matplotlib.patches import Patch, PathPatch
+
+    palette = palette or RCC_TERCILE_COLORS["precip" if variable == "precip" else "temperature"]
+    labels = category_labels or RCC_CATEGORY_LABEL
+    cats = [str(c) for c in prob[category_dim].values]
+    values = prob.transpose(category_dim, "latitude", "longitude").values * 100.0
+    dominant = np.nanargmax(np.where(np.isfinite(values), values, -1), axis=0)
+    strongest = np.nanmax(values, axis=0)
+    finite = np.isfinite(strongest)
+
+    lon_span, lat_span = extent[1] - extent[0], extent[3] - extent[2]
+    ax_w = float(map_width)
+    ax_h = ax_w * lat_span / lon_span
+    title_text = _wrap(title, 70) if title else ""
+    sub_text = _wrap(subtitle, 62) if subtitle else ""
+    caption_text = (caption if caption_mono else _wrap(caption, 92)) if caption else ""
+    n_title = title_text.count("\n") + 1 if title_text else 0
+    n_sub = sub_text.count("\n") + 1 if sub_text else 0
+    n_caption = caption_text.count("\n") + 1 if caption_text else 0
+    left, right = 0.75, 1.95
+    foot = 0.62 + 0.19 * n_caption
+    head = 0.22 + 0.27 * n_title + 0.26 * n_sub + 0.16
+    fig_w, fig_h = left + ax_w + right, head + ax_h + foot
+    fig = plt.figure(figsize=(fig_w, fig_h))
+    ax = fig.add_axes([left / fig_w, foot / fig_h, ax_w / fig_w, ax_h / fig_h],
+                      projection=ccrs.PlateCarree())
+    setup_ax(ax, extent, shapefile, left_labels=True, right_labels=False, bottom_labels=True)
+
+    weak = finite & (strongest < RCC_BINS[0])
+    ax.pcolormesh(prob["longitude"], prob["latitude"], np.where(weak, 1.0, np.nan),
+                  cmap=ListedColormap([NO_DOMINANT_COLOR]), shading="nearest",
+                  transform=ccrs.PlateCarree())
+
+    meshes = {}
+    for index, cat in enumerate(cats):
+        colours = palette.get(cat, palette["NN"])
+        cmap = ListedColormap(colours)
+        cmap.set_over(colours[-1])
+        norm = BoundaryNorm(RCC_BINS, cmap.N)
+        region = finite & (dominant == index) & (strongest >= RCC_BINS[0])
+        field = np.where(region, strongest, np.nan)
+        # smoothed **inside** the category and nowhere else: the values are the
+        # ones of the file, the shading only interpolates the colour between two
+        # cells that carry the same category, and the mesh is clipped to those
+        # cells. A gradient crossing a boundary would paint a colour belonging to
+        # no category, which the RCC convention forbids; a plain nearest shading
+        # would show the grid.
+        clip = cells_path(prob["longitude"].values, prob["latitude"].values, region)
+        if clip is None:
+            # the category wins nowhere on this period: its bar is still drawn,
+            # so that the three scales stay in the same place from one map to
+            # the next and a reader never wonders which one is missing
+            from matplotlib.cm import ScalarMappable
+
+            meshes[cat] = ScalarMappable(norm=norm, cmap=cmap)
+            continue
+        values = _nearest_filled(prob.isel({category_dim: index}).copy(data=field))
+        meshes[cat] = ax.pcolormesh(prob["longitude"], prob["latitude"], values, cmap=cmap,
+                                    norm=norm, shading="gouraud",
+                                    transform=ccrs.PlateCarree())
+        patch = PathPatch(clip, transform=ccrs.PlateCarree()._as_mpl_transform(ax),
+                          facecolor="none", edgecolor="none")
+        ax.add_patch(patch)
+        meshes[cat].set_clip_path(patch)
+
+    # the dry cells are painted last, over the categories: a category drawn
+    # there would be read as a forecast, and the mask exists to say there is none
+    if dry_mask is not None:
+        dry = np.asarray(dry_mask.values if hasattr(dry_mask, "values") else dry_mask)
+        sand = ax.pcolormesh(prob["longitude"], prob["latitude"], np.where(dry, 1.0, np.nan),
+                             cmap=ListedColormap([DRY_COLOR]), shading="nearest",
+                             transform=ccrs.PlateCarree(), zorder=2.0)
+        clip_to_shapefile(sand, ax, shapefile)
+
+    # the three bars share the **whole** height of the map frame: a bar hanging
+    # below the frame reads as if it belonged to something else
+    order = [c for c in ("AN", "NN", "BN") if c in meshes]
+    bar_h = 0.28 * ax_h
+    gap = (ax_h - len(order) * bar_h) / max(len(order) - 1, 1)
+    for row, cat in enumerate(order):
+        cax = fig.add_axes([(left + ax_w + 0.30) / fig_w,
+                            (foot + ax_h - (row + 1) * bar_h - row * gap) / fig_h,
+                            0.20 / fig_w, bar_h / fig_h])
+        cbar = fig.colorbar(meshes[cat], cax=cax, orientation="vertical", ticks=RCC_BINS)
+        cbar.set_label(f"{labels.get(cat, cat)} (%)", fontsize=8.5)
+        cbar.ax.tick_params(labelsize=7.5)
+
+    handles = [Patch(facecolor=NO_DOMINANT_COLOR, edgecolor="black",
+                     label="No dominant Class")]
+    if dry_mask is not None:
+        handles.append(Patch(facecolor=DRY_COLOR, edgecolor="black", label="dry mask"))
+    ax.legend(handles=handles, loc="lower left", fontsize=7.5, framealpha=0.9)
+
+    centre = (left + ax_w / 2) / fig_w
+    if title_text:
+        fig.text(centre, 1 - 0.18 / fig_h, title_text, ha="center", va="top",
+                 fontsize=12.5, fontweight="bold", linespacing=1.32)
+    if sub_text:
+        fig.text(centre, 1 - (0.26 + 0.27 * n_title) / fig_h, sub_text, ha="center", va="top",
+                 fontsize=12.5, fontweight="bold", color="#000000", linespacing=1.32)
+    if caption_text:
+        size = (_mono_fontsize(caption_text, fig_w - 0.4) if caption_mono else 9.2)
+        fig.text(0.5 if caption_mono else centre, (foot - 0.34) / fig_h, caption_text,
+                 ha="center", va="top",
+                 fontsize=size, color="#222222",
+                 family="monospace" if caption_mono else None, linespacing=1.45)
+    if logo:
+        add_logo(ax, logo, zoom=0.27, loc="upper right")
+    if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_path, dpi=150)
+        plt.close(fig)
+        return Path(output_path)
+    return fig
+
+
+# =====================================================================
+# DISPLAY RULES OF THE PRODUCTS (reference chain: run_forecast_v2)
+# =====================================================================
+# Each product of the catalogue is drawn with the palette and the levels the
+# reference chain uses for it, so that a forecaster reads the same colours in
+# the operational bulletin and in this chain. The palettes are transcribed from
+# ``s2s_config_v2.py`` (TP_COLORS, PROB_CMAP, SPI_DET_CMAP) and the levels from
+# ``s2s_plotting_v2.py``; the tercile map alone departs from it, to follow the
+# RCC convention of the Draft Framework annex (:func:`map_tercile_forecast`).
+#
+# One thing is added to every product: the field is **smoothed across the
+# pixels** before it is drawn, as the score and gain maps are. A seasonal
+# forecast is a large-scale field, and a blocky 1° map reads as if each cell
+# were an independent measurement; the bands are drawn on the filled field and
+# clipped back to the CEEAC boundary, so nothing spills outside the domain.
+
+#: anomaly palette: the nine colours of the reference chain, completed with the
+#: intermediate shades the twelve-level colour bar needs (decision of 29/09/2026)
+TP_COLORS = ["#993300", "#CC6600", "#E6A000", "#FFD500", "#FFEE99", "#FFFFFF",
+             "#CCFF66", "#8CE64D", "#2AFF00", "#00B33C", "#009933"]
+TP_UNDER, TP_OVER = "#663300", "#006666"
+#: anomaly levels per time scale (mm): eleven bands, the middle one neutral white
+ANOMALY_LEVELS = {"decade": [-30, -25, -20, -15, -10, -5, 5, 10, 15, 20, 25, 30],
+                  "month": [-100, -75, -50, -40, -30, -20, 20, 30, 40, 50, 75, 100],
+                  "season": [-150, -125, -100, -75, -50, -25, 25, 50, 75, 100, 125, 150]}
+#: rainfall totals: the CAPC-AC accumulation palette, white below the first level
+CUMUL_COLORS = ["#E4F5E2", "#66C168", "#CDE8F7", "#3C8FE0", "#FFE066",
+                "#FFC33D", "#FF9425", "#FA6A1E", "#EE2C24", "#B01118"]
+CUMUL_UNDER, CUMUL_OVER = "#FFFFFF", "#5E0A0A"
+#: total levels per time scale (mm): below the first one the cell stays white,
+#: because a total that small is not a rainfall pattern to read
+CUMUL_LEVELS = {"decade": [1, 5, 10, 15, 20, 30, 40, 50, 75, 100, 150],
+                "month": [10, 25, 50, 75, 100, 150, 200, 250, 300, 400, 500],
+                "season": [25, 50, 100, 150, 200, 300, 400, 500, 700, 900, 1100]}
+#: share of the annual rainfall carried by the period (%): for a season the
+#: pro-rata share is 25 %, so the upper bands mark the places where one season
+#: *is* the year
+SHARE_LEVELS = [1, *range(5, 95, 5)]
+#: deterministic SPI: diverging brown -> white -> green, centred on zero
+SPI_DET_COLORS = [(0.00, "#8c2d04"), (0.20, "#cc4c02"), (0.40, "#fec44f"),
+                  (0.50, "#ffffff"), (0.60, "#a1d99b"), (0.80, "#31a354"),
+                  (1.00, "#00441b")]
+SPI_LEVELS = [-3, -2.5, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 2.5, 3]
+#: exceedance probabilities: the continuous scale of the reference chain
+PROB_CMAP_COLORS = [(0.00, "#ffffff"), (0.10, "#d9f0d3"), (0.30, "#1a9641"),
+                    (0.50, "#ffff00"), (0.70, "#fdae61"), (1.00, "#d7191c")]
+#: probability bins of the single-category maps: cut every 5 % from 35 % to
+#: 90 %, the last band open upwards. Below 35 % nothing is drawn — with three
+#: categories the climatological probability is 33 %, with five quintiles 20 %,
+#: so a probability that low says only "no signal", and a colour there would
+#: invite a decision the forecast does not support (decision of 30/09/2026).
+PROBABILITY_LEVELS = list(range(35, 95, 5))
+#: below the first level the cell stays white, never pale-coloured
+PROBABILITY_UNDER = "#FFFFFF"
+#: colormap of each probability product, as ``_TERCILE_VAR_CFG`` assigns them
+PRODUCT_CMAP = {"categorie_BN": "YlOrBr", "categorie_NN": "YlGn", "categorie_AN": "YlGnBu",
+                "quintile_bas": "OrRd", "quintile_haut": "PuBu",
+                "depassement_median": "RdYlGn"}
+SPI_LABEL = {"decade": "SPI (dekad)", "month": "SPI-1", "season": "SPI-3"}
+
+
+def _interpolated(colors, n: int) -> list:
+    """
+    ``n`` shades built **inside** each colour family of a palette.
+
+    The house palette is five families of two — a pale and a saturated green,
+    then blue, yellow-amber, orange, red. A colour bar cut every 5 % needs
+    eighteen bands, and interpolating across the whole palette would have to
+    travel from blue to yellow: the shades in between come out khaki, and a
+    reader sees a colour that means nothing in the legend. So the bands are
+    shared out between the families and each family is interpolated on its own,
+    from its pale anchor to its saturated one. No band ever sits between two
+    hues.
+    """
+    from matplotlib.colors import to_hex
+
+    families = [colors[i:i + 2] for i in range(0, len(colors), 2)]
+    counts = [n // len(families)] * len(families)
+    for i in range(n - sum(counts)):          # the remainder goes to the low end
+        counts[i] += 1
+    out = []
+    for pair, count in zip(families, counts):
+        if count <= 0:
+            continue
+        ramp = _segmented(pair, "family")
+        out += [to_hex(ramp(k / max(count - 1, 1))) for k in range(count)]
+    return out
+
+
+def _segmented(colors, name: str):
+    from matplotlib.colors import LinearSegmentedColormap
+
+    return LinearSegmentedColormap.from_list(name, colors)
+
+
+def product_style(product: str, scale: str, variable: str = "precip", label: str = "") -> dict:
+    """
+    Palette, levels and colour-bar label of one product.
+
+    ``levels`` and ``colors`` describe discrete bands (the anomaly, the SPI, the
+    probability bins); a product with a ``cmap`` and no ``colors`` is drawn on a
+    continuous scale, which is what the reference chain does for the exceedance
+    probabilities — 101 levels, a tick every 5 %.
+    """
+    scale = scale if scale in ANOMALY_LEVELS else "season"
+    if product == "anomalie":
+        return {"levels": ANOMALY_LEVELS[scale], "colors": TP_COLORS, "extend": "both",
+                "under": TP_UNDER, "over": TP_OVER, "label": "Rainfall anomaly (mm)"}
+    if product == "cumul":
+        return {"levels": CUMUL_LEVELS[scale], "colors": CUMUL_COLORS, "extend": "both",
+                "under": CUMUL_UNDER, "over": CUMUL_OVER, "label": "Rainfall total (mm)"}
+    if product == "spi":
+        return {"levels": SPI_LEVELS, "cmap": _segmented(SPI_DET_COLORS, "spi_det"),
+                "extend": "both", "ticks": SPI_LEVELS,
+                "label": f"{SPI_LABEL.get(scale, 'SPI')} forecast"}
+    if product.startswith("depassement_") and product != "depassement_median":
+        threshold = product.replace("depassement_", "")
+        return {"levels": list(np.arange(0, 101, 1)), "cmap": _segmented(PROB_CMAP_COLORS, "prob"),
+                "ticks": list(range(0, 101, 5)), "extend": "neither", "percent": True,
+                "label": f"Probability of exceeding {threshold} (%)"}
+    if product == "seasonal_share":
+        # cut every 5 % up to 90 %, the last band open upwards: above that a
+        # single period carries almost the whole year, and the arrow says so
+        # better than a band nobody reaches
+        return {"levels": SHARE_LEVELS,
+                "colors": _interpolated(CUMUL_COLORS, len(SHARE_LEVELS) - 1),
+                "extend": "both", "under": "#FFFFFF", "over": CUMUL_OVER,
+                "ticks": SHARE_LEVELS, "label": "Share of the annual rainfall (%)"}
+    if product in PRODUCT_CMAP:
+        return {"levels": PROBABILITY_LEVELS,
+                "colors": _ramp(PRODUCT_CMAP[product], len(PROBABILITY_LEVELS) - 1,
+                                lo=0.18, hi=0.96),
+                "under": PROBABILITY_UNDER, "extend": "max", "percent": True,
+                "ticks": PROBABILITY_LEVELS, "label": f"{label or product} (%)"}
+    return {"cmap": "viridis", "label": label or product, "extend": "both"}
+
+
+def _product_norm(style: dict):
+    """Colormap and norm of a product style, discrete bands or continuous scale."""
+    levels = style.get("levels")
+    if style.get("colors"):
+        colors = style["colors"]
+        if len(colors) != len(levels) - 1:
+            raise ValueError(f"{len(levels)} seuils demandent {len(levels) - 1} couleurs, "
+                             f"{len(colors)} fournies")
+        cmap = ListedColormap(colors)
+        # the extremes are colours of their own: below the first level a total is
+        # too small to read as a pattern (white), above the last one the band is
+        # open-ended and says "more than that"
+        cmap.set_over(style.get("over", colors[-1]))
+        cmap.set_under(style.get("under", colors[0]))
+        return cmap, BoundaryNorm(levels, cmap.N, extend="neither")
+    cmap = style.get("cmap", "viridis")
+    cmap = plt.get_cmap(cmap) if isinstance(cmap, str) else cmap
+    if levels is None:
+        return cmap, None
+    return cmap, BoundaryNorm(levels, 256, extend="neither")
+
+
+def map_product(field, *, product: str, scale: str, variable: str = "precip", dry=None,
+                shapefile=None, logo=None, extent=DEFAULT_EXTENT, title="", subtitle="",
+                caption=None, output_path=None, map_width: float = 5.4, style=None,
+                percent: bool | None = None, caption_mono: bool = False):
+    """
+    One product, one period, one map with the display rules of the reference chain.
+
+    The dry cells are painted first, in the RCC sand grey, and the product is
+    drawn over them: a tercile or a percentile says nothing where the season
+    brings almost no rain, and leaving the colour there would invite a decision
+    the forecast cannot support. The field itself is smoothed across the pixels
+    and clipped to the CEEAC boundary, exactly as the score maps are.
+    """
+    import cartopy.crs as ccrs
+
+    style = product_style(product, scale, variable) if style is None else style
+    cmap, norm = _product_norm(style)
+    percent = style.get("percent", False) if percent is None else percent
+    values = field.values * 100.0 if percent else field.values
+    values = np.where(np.asarray(dry.values, dtype=bool), np.nan, values) if dry is not None \
+        else values
+    plotted = field.copy(data=values)
+
+    caption_text = style.get("caption", "") if caption is None else caption
+    box = _layout(extent, title, subtitle, caption_text, map_width, shapefile,
+                  wrap_caption=not caption_mono)
+    fig, ax = box["fig"], box["ax"]
+    fig_w, fig_h = box["fig_w"], box["fig_h"]
+
+    # filled contours, not a resampling: the values are never changed, matplotlib
+    # only places the band boundaries between neighbouring cell centres. The
+    # missing cells are filled with their nearest neighbour beforehand so the
+    # bands reach the border instead of stopping one cell short, and everything
+    # is clipped back to the CEEAC afterwards, so nothing invented is ever shown
+    mesh = ax.contourf(field["longitude"], field["latitude"], _nearest_filled(plotted),
+                       levels=style.get("levels"), cmap=cmap, norm=norm,
+                       extend=style.get("extend", "both"), transform=ccrs.PlateCarree(),
+                       zorder=1.4)
+    clip_to_shapefile(mesh, ax, shapefile)
+    # the dry cells are painted over the product, cell by cell: there the
+    # forecast says nothing a user could act on, and a colour there would
+    # suggest otherwise
+    if dry is not None:
+        painted = np.where(np.asarray(dry.fillna(False).values, dtype=bool), 1.0, np.nan)
+        sand = ax.pcolormesh(field["longitude"], field["latitude"], painted,
+                             cmap=ListedColormap([DRY_COLOR]), shading="nearest",
+                             transform=ccrs.PlateCarree(), zorder=1.8)
+        clip_to_shapefile(sand, ax, shapefile)
+
+    # the three lines of the bulletin header, all in bold: what is shown, which
+    # forecast and which weighting, and the initialisation the whole map hangs on
+    centre = box["centre"]
+    if box["title"]:
+        fig.text(centre, 1 - 0.18 / fig_h, box["title"], ha="center", va="top",
+                 fontsize=12.5, fontweight="bold", linespacing=1.32)
+    if box["subtitle"]:
+        fig.text(centre, 1 - (0.26 + 0.27 * box["n_title"]) / fig_h, box["subtitle"],
+                 ha="center", va="top", fontsize=12.5, fontweight="bold", color="#000000",
+                 linespacing=1.32)
+
+    cax = fig.add_axes([(box["left"] + box["ax_w"] + 0.22) / fig_w,
+                        (box["foot"] + 0.05 * box["ax_h"]) / fig_h,
+                        0.22 / fig_w, 0.90 * box["ax_h"] / fig_h])
+    cbar = fig.colorbar(mesh, cax=cax, orientation="vertical",
+                        ticks=style.get("ticks", style.get("levels")))
+    cbar.set_label(style.get("label", product), fontsize=10)
+    cbar.ax.tick_params(labelsize=9)
+
+    if dry is not None and bool(np.asarray(dry.fillna(False).values).any()):
+        from matplotlib.patches import Patch
+
+        ax.legend(handles=[Patch(facecolor=DRY_COLOR, edgecolor="black", label="dry mask")],
+                  loc="lower left", fontsize=8, framealpha=0.9)
+    # under the map, the models the combination was built from: a multi-model map
+    # without the list of its members cannot be checked by whoever reads it
+    if box["caption"]:
+        size = (_mono_fontsize(box["caption"], fig_w - 0.4) if caption_mono else 9.2)
+        fig.text(0.5 if caption_mono else centre, (box["foot"] - 0.30) / fig_h, box["caption"],
+                 ha="center", va="top",
+                 fontsize=size, color="#222222",
+                 family="monospace" if caption_mono else None, linespacing=1.45)
+    add_logo(ax, logo, zoom=0.27, loc="upper right")
+    if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_path, dpi=DPI, facecolor="white")
+        plt.close(fig)
+        return Path(output_path)
+    return fig

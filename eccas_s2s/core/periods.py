@@ -109,6 +109,39 @@ class Period:
         years = f"{start:%Y}" if start.year == end.year else f"{start:%Y}-{end:%y}"
         return f"{acronym} {years}"
 
+    def label_en(self, init_year: int) -> str:
+        """
+        Bulletin wording of the period, in English: what goes on a map title.
+
+        ``September 2026``, ``OND 2026``, ``1st Decad of September 2026``. The
+        compact :meth:`label` (``2026-09-D1``) stays what the files and tables
+        are keyed on — it sorts and never depends on a language — but a reader
+        of a map should not have to decode it.
+        """
+        start, _ = self.dates(init_year)
+        if self.scale == "decade":
+            return (f"{_ORDINAL_EN[self.decade - 1]} Decad of "
+                    f"{start:%B} {start:%Y}")
+        if self.scale == "month":
+            return f"{start:%B} {start:%Y}"
+        return self.label(init_year)
+
+    def slug(self, init_year: int) -> str:
+        """
+        File-name form of the period: ``september2026``, ``OND2026``,
+        ``1st_decad_september2026``.
+
+        The maps are named as the reference chain names them, so that a file
+        pulled out of its folder still says what it shows.
+        """
+        start, _ = self.dates(init_year)
+        if self.scale == "decade":
+            return (f"{_ORDINAL_EN[self.decade - 1]}_decad_"
+                    f"{start:%B}{start:%Y}".lower())
+        if self.scale == "month":
+            return f"{start:%B}{start:%Y}".lower()
+        return self.label(init_year).replace(" ", "")
+
     def label_fr(self, init_year: int, with_dates: bool = False) -> str:
         """
         Explicit French label for maps and bulletins.
@@ -129,6 +162,10 @@ class Period:
             return head
         return (f"{head} ({start:%d} {_MONTH_ABBR_FR[start.month - 1]} – "
                 f"{end:%d} {_MONTH_ABBR_FR[end.month - 1]} {end:%Y})")
+
+
+#: ordinals of the three dekads, as the bulletins write them
+_ORDINAL_EN = ("1st", "2nd", "3rd")
 
 
 def build_periods(init_date: pd.Timestamp, horizon_days: int,
