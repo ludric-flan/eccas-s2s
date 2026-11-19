@@ -100,13 +100,12 @@ def run(config: str, systems=("c3s",), variables=("precip",), models=None, scale
     word = KIND_LABEL.get(kind, KIND)
     register = None
     if kind == "calibrated":
-        import pandas as pd
+        from eccas_s2s.registry import CALIBRATION, read_register, registry_path
 
-        reg_path = cfg.path_of("output_root") / "registry" / "calibration_methods.csv"
-        if not reg_path.exists():
-            raise FileNotFoundError(
-                f"{reg_path} absent : lancer d'abord run_calibrate_hindcast.py")
-        register = pd.read_csv(reg_path)
+        register = read_register(cfg, CALIBRATION)
+        if register is None:
+            raise FileNotFoundError(f"{registry_path(cfg, CALIBRATION)} absent : "
+                                    "lancer d'abord run_calibrate_hindcast.py")
     scales = list(scales) if scales else cfg.scales
 
     # a system switched off in the configuration is skipped, not attempted

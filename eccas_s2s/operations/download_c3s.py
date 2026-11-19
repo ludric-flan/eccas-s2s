@@ -13,7 +13,13 @@ Show the CDS requests without downloading::
 
 Download precipitation forecasts and hindcasts for all models::
 
-    python scripts/run_download_c3s.py --config config/cycle_202609.yaml --variable precip
+    python scripts/run_download_c3s.py --config config/cycle_202609.yaml --variables precip
+
+Several variables in one call, downloaded one after the other (the CDS queue
+serves the requests in order anyway); ``tmoy`` is accepted for ``t2m``::
+
+    python scripts/run_download_c3s.py --config config/cycle_202611.yaml \
+        --variables precip tmoy tmax tmin
 
 A model that fails does not stop the others; failures are listed in the manifest.
 """
@@ -29,6 +35,34 @@ from eccas_s2s.settings import load_cycle
 
 #: OSF variable name -> key of eccas_s2s.io.c3s.C3S_VARIABLES
 VARIABLE_KEYS = {"precip": "PRCP", "t2m": "TEMP", "tmax": "TMAX", "tmin": "TMIN"}
+
+#: names accepted for each variable (French operational usage included)
+VARIABLE_ALIASES = {"precip": "precip", "pluie": "precip", "pr": "precip", "tp": "precip",
+                    "t2m": "t2m", "tmoy": "t2m", "tmean": "t2m", "tas": "t2m",
+                    "tmax": "tmax", "tx": "tmax", "tmin": "tmin", "tn": "tmin"}
+
+
+def canonical_variables(variables) -> list[str]:
+    """
+    The OSF names of the requested variables, in the order given, without repeats.
+
+    Accepts one name or a list, and the aliases of :data:`VARIABLE_ALIASES`
+    (``"tmoy"`` → ``"t2m"``).
+    """
+    if isinstance(variables, str):
+        variables = [variables]
+    out, unknown = [], []
+    for v in variables:
+        name = VARIABLE_ALIASES.get(str(v).strip().lower())
+        if name is None:
+            unknown.append(v)
+        elif name not in out:
+            out.append(name)
+    if unknown:
+        raise ValueError(f"variable(s) inconnue(s) {unknown} ; valeurs admises : "
+                         f"{sorted(VARIABLE_ALIASES)}")
+    return out
+
 
 #: variables always taken from the C3S *monthly* statistics: the 2 m mean
 #: temperature (decision of 2026-09-19, lighter than 6-hourly fields). For the
@@ -85,8 +119,7 @@ def run(config: str, variable: str = "precip", kinds=("forecast", "hindcast"),
     unknown = sorted(set(selected) - set(all_models))
     if unknown:
         raise ValueError(f"modèles absents de la configuration : {unknown}")
-    if variable not in VARIABLE_KEYS:
-        raise ValueError(f"variable inconnue {variable!r} ; valeurs : {sorted(VARIABLE_KEYS)}")
+    variable = canonical_variables(variable)[0]
 
     init = cfg.init_date
     area = cfg.c3s_download_area
@@ -145,10 +178,33 @@ def run(config: str, variable: str = "precip", kinds=("forecast", "hindcast"),
     return ctx
 
 
+def run_variables(config: str, variables=("precip",), kinds=("forecast", "hindcast"),
+                  models=None, dry_run: bool = False, stream: str = "auto") -> dict:
+    """
+    Download several variables, one after the other: ``{variable: RunContext}``.
+
+    Each variable keeps its own run and manifest (``download_c3s_<variable>``), as
+    when it is downloaded alone; a variable that fails entirely does not stop the
+    next one, and its error is returned in place of the context.
+    """
+    names = canonical_variables(variables)
+    out = {}
+    for i, variable in enumerate(names, 1):
+        print(f"=== variable {i}/{len(names)} : {variable} ===")
+        try:
+            out[variable] = run(config, variable, kinds=kinds, models=models,
+                                dry_run=dry_run, stream=stream)
+        except Exception as exc:  # noqa: BLE001 — reported, the next variable goes on
+            print(f"échec de la variable {variable} : {type(exc).__name__}: {exc}")
+            out[variable] = exc
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", required=True, help="fichier config/cycle_YYYYMM.yaml")
-    ap.add_argument("--variable", default="precip", choices=sorted(VARIABLE_KEYS))
+    ap.add_argument("--variables", "--variable", nargs="+", default=["precip"],
+                    help="une ou plusieurs variables : precip, t2m (ou tmoy), tmax, tmin")
     ap.add_argument("--kind", nargs="+", default=["forecast", "hindcast"],
                     choices=["forecast", "hindcast"])
     ap.add_argument("--models", nargs="+", help="sous-ensemble de modèles (défaut : tous)")
@@ -156,7 +212,7 @@ def main(argv=None):
     ap.add_argument("--stream", default="auto", choices=["auto", "daily", "monthly"],
                     help="flux ; « auto » suit precip_from de la configuration")
     args = ap.parse_args(argv)
-    run(args.config, args.variable, args.kind, args.models, args.dry_run, args.stream)
+    run_variables(args.config, args.variables, args.kind, args.models, args.dry_run, args.stream)
 
 
 if __name__ == "__main__":

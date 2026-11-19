@@ -53,6 +53,7 @@ from eccas_s2s.obs.climatology import obs_period_totals
 from eccas_s2s.obs.regrid import conservative_to_degree, match_model_grid
 from eccas_s2s.operations import c3s_totals, nmme_totals, obs_chirps, obs_era5
 from eccas_s2s.provenance import RunContext
+from eccas_s2s.registry import MODELS, PRODUCTS, write_register
 from eccas_s2s.settings import load_cycle
 from eccas_s2s.calibrate.base import RawEnsemble
 from eccas_s2s.products.catalogue import VALUE
@@ -416,16 +417,14 @@ def _write_summary(cfg, ctx, out: Path, rows: list[dict],
 
     # le registre répond à « quel modèle peut entrer dans le workflow » : un
     # multi-modèle en est une sortie, pas une entrée, et ses lignes restent dans
-    # la synthèse sans entrer dans l'admission
+    # la synthèse sans entrer dans l'admission. Registres du cycle
+    # (registry/<cycle>/), recalculés sur toute la synthèse du cycle et non sur
+    # les seules lignes de ce run
     register = eligibility_table(table[table["system"] != "mme"], min_fraction)
-    reg_dir = cfg.path_of("output_root") / "registry"
-    reg_dir.mkdir(parents=True, exist_ok=True)
-    f = reg_dir / "products_eligibility.csv"
-    register.to_csv(f, index=False)
+    f = write_register(cfg, register, PRODUCTS)
     ctx.record_output(f, role="eligibility")
     models = models_eligibility(register)
-    f = reg_dir / "models_eligibility.csv"
-    models.to_csv(f, index=False)
+    f = write_register(cfg, models, MODELS)
     ctx.record_output(f, role="models_eligibility")
     counts = register["status"].value_counts().to_dict()
     ctx.log.info("registre : %s", ", ".join(f"{v} {k}" for k, v in counts.items()))

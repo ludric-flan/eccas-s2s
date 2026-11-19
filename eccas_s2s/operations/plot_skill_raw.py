@@ -66,14 +66,9 @@ def _product_label(cfg, variable: str, scale: str, product: str) -> str:
 
 def _recommended_methods(cfg) -> dict:
     """``(system, model, variable, scale, product) -> recommended method``, from the register."""
-    import pandas as pd
+    from eccas_s2s.registry import recommended_methods
 
-    path = cfg.path_of("output_root") / "registry" / "calibration_methods.csv"
-    if not path.exists():
-        return {}
-    table = pd.read_csv(path)
-    keys = ["system", "model", "variable", "scale", "product"]
-    return {tuple(row[k] for k in keys): row["method"] for _, row in table.iterrows()}
+    return recommended_methods(cfg, ("system", "model", "variable", "scale", "product"))
 
 
 #: how a weighting scheme is named in the title of a multi-model skill map

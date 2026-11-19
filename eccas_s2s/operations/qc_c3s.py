@@ -7,22 +7,27 @@ a run manifest.
 
 Example::
 
-    python scripts/run_qc_c3s.py --config config/cycle_202609.yaml --variable precip
+    python scripts/run_qc_c3s.py --config config/cycle_202609.yaml --variables precip tmax tmin
+
+The control reads the **daily** GRIB files. A variable taken only from the
+monthly statistics (``t2m``) has none and is skipped with a message; the
+monthly files (UKMO, BoM, NCEP rainfall) are not covered yet.
 """
 from __future__ import annotations
 
 import argparse
 
 from eccas_s2s.io.c3s_qc import effective_horizons, qc_table
+from eccas_s2s.operations.download_c3s import (MONTHLY_VARIABLES, VARIABLE_KEYS,
+                                               canonical_variables)
 from eccas_s2s.provenance import RunContext
 from eccas_s2s.settings import load_cycle
-
-VARIABLE_KEYS = {"precip": "PRCP", "t2m": "TEMP"}
 
 
 def run(config: str, variable: str = "precip"):
     """Run the QC and return ``(files_table, horizons_table, run_context)``."""
     cfg = load_cycle(config)
+    variable = canonical_variables(variable)[0]
     raw_dir = cfg.raw_dir("c3s")
     pattern = f"c3s_*_{VARIABLE_KEYS[variable]}_*_{cfg.init_date:%m}.grib"
     out_dir = cfg.output_root / "qc" / cfg.cycle_id
@@ -60,12 +65,24 @@ def run(config: str, variable: str = "precip"):
     return qc, horizons, ctx
 
 
+def run_variables(config: str, variables=("precip",)) -> dict:
+    """QC of several variables: ``{variable: (files, horizons, ctx)}``, monthly-only skipped."""
+    out = {}
+    for variable in canonical_variables(variables):
+        if variable in MONTHLY_VARIABLES:
+            print(f"{variable} : flux mensuel seul, pas de fichier journalier à contrôler")
+            continue
+        out[variable] = run(config, variable)
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", required=True)
-    ap.add_argument("--variable", default="precip", choices=sorted(VARIABLE_KEYS))
+    ap.add_argument("--variables", "--variable", nargs="+", default=["precip"],
+                    help="une ou plusieurs variables : precip, t2m (ou tmoy), tmax, tmin")
     args = ap.parse_args(argv)
-    run(args.config, args.variable)
+    run_variables(args.config, args.variables)
 
 
 if __name__ == "__main__":

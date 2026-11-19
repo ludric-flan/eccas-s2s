@@ -42,6 +42,15 @@ import xarray as xr
 
 from eccas_s2s.validate.product_scores import LOWER_IS_BETTER, NO_SKILL_VALUE
 
+#: a gain smaller than this is a tie, not an improvement. Where a method leaves
+#: the forecast unchanged (an additive bias correction cannot move an ACC, a
+#: monotonic mapping often leaves tercile counts as they were), the calibrated and
+#: the raw scores are equal and their difference is rounding noise (~1e-9 in
+#: memory, exactly 0 once written in single precision). Counting that noise as an
+#: improvement made the run and the rebuild from the netCDFs disagree by up to
+#: 14 % of the mask on ``fraction_improved`` (found on 19/11/2026).
+TIE = 1e-6
+
 
 def no_skill_value(metric: str) -> float:
     """Value the metric takes without skill (0, or 0.5 for an area under the ROC curve)."""
@@ -93,7 +102,7 @@ def compare_maps(calibrated: xr.DataArray, raw: xr.DataArray, metric: str,
         "median_raw": float(raw.where(valid).median()),
         "median_calibrated": float(calibrated.where(valid).median()),
         "median_gain": float(gain.where(valid).median()),
-        "fraction_improved": fraction_above(gain, valid, 0.0),
+        "fraction_improved": fraction_above(gain, valid, TIE),
         "fraction_repaired": fraction_above((~raw_ok & cal_ok).astype(float), valid, 0.5),
         "fraction_broken": fraction_above((raw_ok & ~cal_ok).astype(float), valid, 0.5),
         "n_cells": int(valid.sum()),
@@ -106,7 +115,7 @@ def recommend(table: pd.DataFrame, min_improved: float = 0.5,
     Recommended method per product, from the comparison table.
 
     A method is a candidate when it improves the **typical** grid point
-    (``median_gain`` above ``min_gain``) **and** improves a broad part of the
+    (``median_gain`` above ``min_gain``, by more than a tie) **and** improves a broad part of the
     mask (``fraction_improved`` at least ``min_improved``): the two conditions
     together exclude a method that wins big in one corner and loses everywhere
     else. Among the candidates, the recommended one has the largest median gain;
@@ -120,7 +129,7 @@ def recommend(table: pd.DataFrame, min_improved: float = 0.5,
             if k in table.columns]
     rows = []
     for key, group in table.groupby(keys, dropna=False):
-        candidates = group[(group["median_gain"] > min_gain)
+        candidates = group[(group["median_gain"] > min_gain + TIE)
                            & (group["fraction_improved"] >= min_improved)]
         record = dict(zip(keys, key if isinstance(key, tuple) else (key,)))
         if candidates.empty:

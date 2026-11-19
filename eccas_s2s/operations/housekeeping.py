@@ -27,6 +27,7 @@ import xarray as xr
 from eccas_s2s.io.netcdf import from_cf, open_cf, save as save_cf
 from eccas_s2s.operations.skill_raw import skill_dir
 from eccas_s2s.provenance import RunContext
+from eccas_s2s.registry import MODELS, write_register
 from eccas_s2s.settings import load_cycle
 
 SUMMARY = {"raw": "skill_raw_summary.csv", "calibrated": "skill_calibrated_summary.csv"}
@@ -164,9 +165,7 @@ def prune(config: str, kinds=("raw",), dry_run: bool = False) -> RunContext:
                                 .agg(["sum", "count"]).reset_index()
                                 .rename(columns={"sum": "periods_eligible", "count": "periods"}))
                         elig["eligible"] = elig["periods_eligible"] > 0
-                        reg = cfg.path_of("output_root") / "registry" / "models_eligibility.csv"
-                        reg.parent.mkdir(parents=True, exist_ok=True)
-                        elig.to_csv(reg, index=False)
+                        reg = write_register(cfg, elig, MODELS)
                         ctx.record_output(reg, role="eligibility")
     return ctx
 

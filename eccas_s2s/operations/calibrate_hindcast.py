@@ -53,7 +53,9 @@ from eccas_s2s.operations.skill_raw import (AGGREGATION, MIN_FRACTION, OBS_VARIA
                                             horizon_days, product_summary_rows, skill_dir,
                                             split_skill_name, write_product_netcdf)
 from eccas_s2s.obs.climatology import obs_period_totals
+from eccas_s2s.io.netcdf import open_cf
 from eccas_s2s.provenance import RunContext
+from eccas_s2s.registry import CALIBRATION, merge_rows, write_register
 from eccas_s2s.settings import load_cycle
 from eccas_s2s.validate.cv import loyo_quantile
 from eccas_s2s.validate.comparison import compare_maps, gain_map, recommend
@@ -159,6 +161,7 @@ def run(config: str, systems=("c3s",), variables=("precip",), models=None, scale
     with RunContext(cfg, step="calibrate_hindcast") as ctx:
         announce_subset(cfg, ctx, selection)
         ctx.record_parameter("systems", list(systems))
+        ctx.record_parameter("models", list(models) if models else "tous")
         ctx.record_parameter("variables", list(variables))
         ctx.record_parameter("scales", list(scales))
         ctx.record_parameter("families", list(families))
@@ -343,45 +346,172 @@ def run(config: str, systems=("c3s",), variables=("precip",), models=None, scale
     return ctx
 
 
+#: key of a row of the calibrated summary / of the comparison table
+SUMMARY_KEYS = ["system", "model", "variable", "scale", "period", "product", "method", "metric"]
+COMPARISON_KEYS = ["system", "model", "variable", "scale", "product", "metric", "method",
+                   "period"]
+
+
 def _write_calibrated_outputs(cfg, ctx, skill_root, summary_rows, comparison_rows,
                               min_improved: float = 0.5) -> None:
-    """Summary of the calibrated scores, comparison with the raw baseline, and register."""
-    keys = ["system", "model", "variable", "scale", "period", "product", "method", "metric"]
+    """
+    Summary of the calibrated scores, comparison with the raw baseline, and register.
+
+    The two tables are **merged** into those of the cycle — a run on one model
+    replaces that model's rows and keeps the others — and the register is then
+    recomputed from the whole comparison table of the cycle, never from the rows
+    of the current run alone.
+    """
     if summary_rows:
-        table = pd.DataFrame(summary_rows)
         path = skill_root / "skill_calibrated_summary.csv"
         path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            old = pd.read_csv(path)
-            if set(keys) <= set(old.columns):
-                old = old[~old.set_index(keys).index.isin(table.set_index(keys).index)]
-                table = pd.concat([old, table], ignore_index=True)
-        table.sort_values(keys).to_csv(path, index=False)
+        table = merge_rows(pd.DataFrame(summary_rows), path, SUMMARY_KEYS)
+        table.sort_values(SUMMARY_KEYS).to_csv(path, index=False)
         ctx.record_output(path, role="summary")
 
     if not comparison_rows:
         return
-    comparison = pd.DataFrame(comparison_rows)
     path = skill_root / "comparison_raw_calibrated.csv"
-    comparison.sort_values(["system", "model", "variable", "scale", "product", "metric",
-                            "method", "period"]).to_csv(path, index=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    comparison = merge_rows(pd.DataFrame(comparison_rows), path, COMPARISON_KEYS)
+    comparison = comparison.sort_values(COMPARISON_KEYS)
+    comparison.to_csv(path, index=False)
     ctx.record_output(path, role="comparison")
+    write_calibration_register(cfg, ctx, comparison, min_improved)
 
+
+def write_calibration_register(cfg, ctx, comparison: pd.DataFrame,
+                               min_improved: float = 0.5) -> pd.DataFrame:
+    """Register of the cycle, from the comparison table of the whole cycle."""
     # la méthode recommandée se décide sur la métrique qui décide pour le produit,
     # et seulement pour les modèles : le multi-modèle n'a pas de méthode propre,
     # chacun de ses membres entrant avec celle que ce registre lui recommande
-    deciding = comparison[comparison["deciding"]]
+    flag = comparison["deciding"]
+    if flag.dtype != bool:                       # relu d'un CSV : "True" / "False"
+        flag = flag.astype(str).str.lower() == "true"
+    deciding = comparison[flag]
     register = recommend(deciding[deciding.get("system", "c3s") != "mme"],
                          min_improved=min_improved)
-    reg_dir = cfg.path_of("output_root") / "registry"
-    reg_dir.mkdir(parents=True, exist_ok=True)
-    path = reg_dir / "calibration_methods.csv"
-    register.to_csv(path, index=False)
+    path = write_register(cfg, register, CALIBRATION)
     ctx.record_output(path, role="calibration_register")
     counts = register["method"].value_counts().to_dict()
-    ctx.log.info("méthodes recommandées : %s",
+    ctx.log.info("registre %s : %d décision(s), %d modèle(s) — %s", cfg.cycle_id,
+                 len(register), register["model"].nunique(),
                  ", ".join(f"{v}x {k}" for k, v in counts.items()))
     ctx.record_parameter("recommended_methods", counts)
+    return register
+
+
+def _open_metric_files(folder: Path) -> xr.Dataset | None:
+    """The score maps of one method (``<metric>.nc``, gains excluded), as one dataset."""
+    files = [f for f in sorted(folder.glob("*.nc")) if not f.name.startswith("gain_")]
+    if not files:
+        return None
+    maps = xr.merge([open_cf(f) for f in files], combine_attrs="override").load()
+    return maps.drop_vars([v for v in ("time_bnds",) if v in maps.variables])
+
+
+def rebuild_tables(config: str, models=None, variables=None, scales=None,
+                   min_improved: float = 0.5, write: bool = True) -> RunContext:
+    """
+    Rebuild the summary, the comparison and the register from the score netCDFs.
+
+    Every score map of the calibration is written as soon as it is computed
+    (``skill/<cycle>/calibrated/netcdf/<système>_<modèle>/<échelle>/<variable>/
+    <produit>/<méthode>/<métrique>.nc``); the tables are only their summary over
+    the CEEAC mask. A run interrupted after some models, or a register damaged
+    by a partial run, is therefore repaired in minutes, without fitting a single
+    method again. The comparison uses exactly the functions of the run
+    (:func:`compare_maps`, :func:`product_summary_rows`).
+
+    ``write=False`` computes the tables without touching the files of the cycle
+    (used to check the rebuild against a table written by a run).
+    """
+    from eccas_s2s.core.geo import mask_like
+
+    cfg = load_cycle(config)
+    skill_root = skill_dir(cfg, "calibrated")
+    shapefile = cfg.raw["paths"]["shapefile"]
+    lead_of = {p.key: p.month_offset
+               for p in cfg.periods_for(10_000, tuple(cfg.scales), selection="all")}
+    with RunContext(cfg, step="calibrate_rebuild_tables") as ctx:
+        ctx.record_parameter("models", list(models) if models else None)
+        ctx.record_parameter("write", write)
+        summary_rows, comparison_rows = [], []
+        masks: dict = {}
+        for product_dir in sorted((skill_root / "netcdf").glob("*/*/*/*")):
+            system, model = product_dir.parent.parent.parent.name.split("_", 1)
+            scale, variable, pname = (product_dir.parent.parent.name,
+                                      product_dir.parent.name, product_dir.name)
+            if system == "mme" or (models and model not in models) \
+                    or (variables and variable not in variables) \
+                    or (scales and scale not in scales):
+                continue
+            scored = {}
+            for method_dir in sorted(p for p in product_dir.iterdir() if p.is_dir()):
+                maps = _open_metric_files(method_dir)
+                if maps is not None:
+                    scored[method_dir.name] = maps
+            if "raw" not in scored:
+                ctx.warn(f"{product_dir} : pas de référence brute, produit ignoré")
+                continue
+            grid = scored["raw"]
+            first = grid[[v for v in grid.data_vars if v != "n_years"][0]]
+            first = first.isel(period=0, drop=True)
+            if "category" in first.dims:
+                first = first.isel(category=0, drop=True)
+            gkey = (first.sizes["latitude"], first.sizes["longitude"])
+            if gkey not in masks:
+                masks[gkey] = mask_like(shapefile, first)
+            mask = masks[gkey]
+            label = _product_label(cfg, variable, scale, pname)
+            for mname, maps in scored.items():
+                stream = maps.attrs.get("stream", "daily")
+                rows = product_summary_rows(maps, mask, system, model, variable, scale,
+                                            pname, lead_of, stream)
+                for row in rows:
+                    row["method"] = mname
+                    row["product_label"] = label
+                summary_rows += rows
+                if mname == "raw":
+                    continue
+                ref_ds = scored["raw"]
+                deciding = maps.attrs.get("deciding", "")
+                common = [v for v in maps.data_vars
+                          if v in ref_ds and v not in ("n_years", "base_rate")
+                          and "category" not in maps[v].dims]
+                for metric in common:
+                    for key in [str(k) for k in maps["period"].values]:
+                        if key not in [str(k) for k in ref_ds["period"].values]:
+                            continue
+                        row = compare_maps(maps[metric].sel(period=key),
+                                           ref_ds[metric].sel(period=key),
+                                           metric, mask, method=mname, product=pname,
+                                           period=key)
+                        row.update({"system": system, "model": model, "variable": variable,
+                                    "scale": scale, "stream": stream,
+                                    "deciding": metric == deciding,
+                                    "label_fr": str(maps["label_fr"].sel(period=key).values)})
+                        comparison_rows.append(row)
+            ctx.log.info("%s %s %s %s %s : %d méthode(s)", system, model, scale, variable,
+                         pname, len(scored))
+        ctx.record_parameter("n_summary_rows", len(summary_rows))
+        ctx.record_parameter("n_comparison_rows", len(comparison_rows))
+        ctx.rebuilt = (pd.DataFrame(summary_rows), pd.DataFrame(comparison_rows))
+        if write:
+            _write_calibrated_outputs(cfg, ctx, skill_root, summary_rows, comparison_rows,
+                                      min_improved)
+    return ctx
+
+
+def _product_label(cfg, variable: str, scale: str, product: str) -> str:
+    """Label of a product in the catalogue (the netCDF attribute is overwritten by CF)."""
+    from eccas_s2s.products.catalogue import catalogue
+
+    for item in catalogue(variable, scale, cfg.thresholds.get(variable, {})):
+        if item.name == product:
+            return item.label or product
+    return product
 
 
 def main(argv=None):
@@ -399,8 +529,15 @@ def main(argv=None):
                     help="métriques par produit : deciding (défaut), reported, all, ou une liste")
     ap.add_argument("--min-improved", type=float, default=0.5,
                     help="part du masque qu'une méthode doit améliorer pour être recommandée")
+    ap.add_argument("--rebuild-tables", action="store_true",
+                    help="reconstruire synthèse, comparaison et registre depuis les netCDF "
+                         "déjà écrits, sans recalculer la calibration")
     add_period_arguments(ap)
     args = ap.parse_args(argv)
+    if args.rebuild_tables:
+        rebuild_tables(args.config, models=args.models, variables=args.variables,
+                       scales=args.scales, min_improved=args.min_improved)
+        return
     run(args.config, args.systems, args.variables, args.models, args.scales, args.families,
         selection=selected_periods(args),
         metrics=args.metrics[0] if len(args.metrics) == 1 else tuple(args.metrics),

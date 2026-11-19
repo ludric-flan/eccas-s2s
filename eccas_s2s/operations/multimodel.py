@@ -51,6 +51,7 @@ from eccas_s2s.obs.climatology import obs_period_totals
 from eccas_s2s.obs.regrid import match_model_grid
 from eccas_s2s.products.forecast import ForecastContext, combine, product_values
 from eccas_s2s.provenance import RunContext
+from eccas_s2s.registry import recommended_methods
 from eccas_s2s.settings import load_cycle
 
 #: the schemes, and what each says. "equal" is the reference of the chain.
@@ -227,13 +228,8 @@ def _read_summary(cfg, kind: str):
 
 
 def _recommended(cfg) -> dict:
-    """``(model, variable, scale, product) -> method`` from the register of phase P3."""
-    path = cfg.path_of("output_root") / "registry" / "calibration_methods.csv"
-    if not path.exists():
-        return {}
-    table = pd.read_csv(path)
-    return {(r["model"], r["variable"], r["scale"], r["product"]): r["method"]
-            for _, r in table.iterrows()}
+    """``(model, variable, scale, product) -> method`` from the register of the cycle (P3)."""
+    return recommended_methods(cfg)
 
 
 def _one_period(cfg, ctx, variable, scale, period, kind, models, normal, mask,

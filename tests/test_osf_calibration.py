@@ -502,7 +502,8 @@ def test_housekeeping_removes_what_the_scores_no_longer_justify(tmp_path):
     assert sorted(p.name for p in figs.iterdir()) == ["month_m0.png", "month_m1.png"]
     table = pd.read_csv(root / "skill_raw_summary.csv")
     assert sorted(table["period"]) == kept
-    assert (cfg.path_of("output_root") / "registry" / "models_eligibility.csv").exists()
+    assert (cfg.path_of("output_root") / "registry" / cfg.cycle_id
+            / "models_eligibility.csv").exists()
 
 
 def test_raw_baseline_of_a_member_less_system_has_no_probability():

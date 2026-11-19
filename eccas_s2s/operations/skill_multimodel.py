@@ -56,6 +56,7 @@ from eccas_s2s.operations.skill_raw import (_load_hindcast, hindcast_streams, ho
                                             prepare_pairs, product_summary_rows, score_paths,
                                             skill_dir, write_product_netcdf)
 from eccas_s2s.provenance import RunContext
+from eccas_s2s.registry import recommended_methods
 from eccas_s2s.settings import load_cycle
 from eccas_s2s.validate.pooled import MAX_PIXELS, SERIES_LABEL, family_frame
 from eccas_s2s.validate.product_scores import (ObservationContext, forecast_field,
@@ -87,13 +88,8 @@ def _read_summary(cfg, kind: str):
 
 
 def _recommended(cfg) -> dict:
-    """``(model, variable, scale, product) -> method`` from the register of phase P3."""
-    path = cfg.path_of("output_root") / "registry" / "calibration_methods.csv"
-    if not path.exists():
-        return {}
-    table = pd.read_csv(path)
-    return {(r["model"], r["variable"], r["scale"], r["product"]): r["method"]
-            for _, r in table.iterrows()}
+    """``(model, variable, scale, product) -> method`` from the register of the cycle (P3)."""
+    return recommended_methods(cfg)
 
 
 def _weights(scheme: str, fields: dict, members: dict, summary, variable, scale, period_key):
