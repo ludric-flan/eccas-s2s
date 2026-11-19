@@ -29,9 +29,12 @@ Les cartes de scores par point de grille sont calculées en Python (`eccas_s2s.v
 
 | Étape | Commande | Phase |
 |---|---|---|
-| E2 · téléchargement C3S | `python scripts/run_download_c3s.py --config config/cycle_202609.yaml --variable precip` | P0 |
-| | *chaque modèle reçoit les flux déclarés par sa clé `precip_from` : journalier, mensuel, ou les deux. `--stream daily\|monthly` force un flux.* | |
-| E2 · contrôle qualité C3S | `python scripts/run_qc_c3s.py --config config/cycle_202609.yaml --variable precip` | P0 |
+| E2 · téléchargement C3S | `python scripts/run_download_c3s.py --config config/cycle_202611.yaml --variables precip tmoy` | P0 |
+| | *une ou plusieurs variables (`precip`, `t2m` ou `tmoy`, `tmax`, `tmin`), téléchargées l'une après l'autre, un manifeste chacune. Chaque modèle reçoit les flux déclarés par sa clé `precip_from` : journalier, mensuel, ou les deux. `--stream daily\|monthly` force un flux.* | |
+| E2 · contrôle qualité C3S | `python scripts/run_qc_c3s.py --config config/cycle_202611.yaml --variables precip tmax tmin` | P0 |
+| | *fichiers journaliers seulement : la T2m (flux mensuel) est sautée, les fichiers mensuels de UKMO, BoM et NCEP ne sont pas encore contrôlés.* | |
+| E1 · mise à jour de CHIRPS (année en cours, à chaque cycle) | `python scripts/run_download_chirps.py --config config/cycle_202611.yaml` | P1 |
+| | *sans `--years` : l'année du dernier mois écoulé. Une année incomplète est retéléchargée si UCSB a publié un fichier plus récent (date `Last-Modified`) ; une année complète, jamais. `--refresh` force.* | |
 | E1 · référence CHIRPS (archive + normales, seulement si CHIRPS a changé) | `python scripts/run_obs_chirps.py --config config/cycle_202609.yaml` | P1 |
 | E2 · cumuls C3S par période | `python scripts/run_c3s_totals.py --config config/cycle_202609.yaml` | P1 |
 | | *`--streams monthly` ne recalcule qu'un flux (sans réécrire l'autre fichier) ; `--periods` choisit les périodes (voir ci-dessous).* | |
@@ -46,7 +49,11 @@ Les cartes de scores par point de grille sont calculées en Python (`eccas_s2s.v
 | | *`--metrics all` trace aussi les compagnons ; `--products` restreint le catalogue* | |
 | E4 · diagrammes de fiabilité et ROC (R) | `python scripts/run_skill_diagrams.py --config config/cycle_202609.yaml --scales month season` | P2 |
 | E4 · reconstruire le tableau de synthèse depuis les netCDF | `python scripts/run_skill_raw.py --config config/cycle_202609.yaml --from-maps` | P2 |
-| … | (ajoutés au fil des phases) | |
+| E5 · calibration, scores, comparaison, registre | voir « Calibration et comparaison (phase P3) » | P3 |
+| E6 · produits multi-modèles (brut et calibré, trois schémas) | `python scripts/run_multimodel.py --config config/cycle_202609.yaml --periods all-seasons` | P6 |
+| E6 · cartes de prévision multi-modèles | `python scripts/run_plot_multimodel.py --config config/cycle_202609.yaml` | P6 |
+| E6 · vérification du multi-modèle (scores, cartes, diagrammes) | `python scripts/run_skill_multimodel.py --config config/cycle_202609.yaml --periods all-seasons` | P6 |
+| E8 · produit informatif « part du total annuel » | `python scripts/run_season_share.py --config config/cycle_202609.yaml --scales season` | P6 |
 
 Chaque étape existe aussi en notebook opérationnel (voir plus bas). Scripts et notebooks appellent la même fonction `run(...)` de `eccas_s2s/operations/`.
 
@@ -65,7 +72,10 @@ Tester une requête sans télécharger : ajouter `--dry-run`.
 | Scores de skill (netCDF, un fichier par métrique) | `OUTPUTS_OSF/skill/<YYYYMM>/raw/netcdf/<système>_<modèle>/<échelle>/<variable>/<produit>/<métrique>.nc` |
 | Cartes de skill (une par période) | `…/raw/figures/<système>_<modèle>/<échelle>/<variable>/<produit>/<métrique>/<période>.png` |
 | Diagrammes fiabilité et ROC (par famille) | `…/raw/diagrams/<système>_<modèle>/<échelle>/<variable>/<famille>/{reliability,roc}/<période>.png` |
-| Synthèse et registres | `OUTPUTS_OSF/skill/<YYYYMM>/raw/skill_raw_summary.csv`, `OUTPUTS_OSF/registry/{products,models}_eligibility.csv` |
+| Synthèses | `OUTPUTS_OSF/skill/<YYYYMM>/raw/skill_raw_summary.csv`, `…/calibrated/{skill_calibrated_summary,comparison_raw_calibrated}.csv` |
+| Registres **du cycle** | `OUTPUTS_OSF/registry/<YYYYMM>/{products_eligibility,models_eligibility,calibration_methods}.csv` |
+| Produits multi-modèles (netCDF et cartes) | `OUTPUTS_OSF/mme/<YYYYMM>/{raw,calibrated}/<variable>/<échelle>/<schéma>/…` et `…/figures/<variable>/<échelle>/<schéma>/<produit>/<produit>_<raw\|calibrated>_<schéma>_forecast_<période>.png` |
+| Part du total annuel | `OUTPUTS_OSF/climatology/<YYYYMM>/seasonal_share/` |
 | Prévisions émises (archive) | `ARCHIVE_OSF/<YYYY>/<MM>/<run_id>/` |
 
 ## Modules OSF (phase P0)
@@ -85,7 +95,9 @@ Tester une requête sans télécharger : ajouter `--dry-run`.
 | `eccas_s2s.obs.era5` | lecture ERA5 journalier, contrôle qualité, moyennes décadaires et mensuelles |
 | `eccas_s2s.io.nmme_cpc` | fichiers NMME du serveur NOAA/CPC (moyenne d'ensemble) |
 | `eccas_s2s.core.monthly` | agrégation mois et saisons depuis des données mensuelles |
-| `eccas_s2s.products.masks` | masque de saison sèche (méthodes `relative` et `absolute`) |
+| `eccas_s2s.products.masks` | masque de saison sèche (méthodes `iri` par défaut, `relative`, `absolute`) |
+| `eccas_s2s.products.forecast` | produits d'une prévision (cumul, anomalie, probabilités, seuils, SPI) et combinaison multi-modèle |
+| `eccas_s2s.registry` | registres d'un cycle (`registry/<YYYYMM>/`), lecture, écriture et fusion des tables |
 | `eccas_s2s.viz.maps` | panneaux de cartes CEEAC |
 | `eccas_s2s.validate.cv` | validation croisée LOYO (moyenne et quantiles laissant l'année dehors) |
 | `eccas_s2s.validate.pairs` | couples prévision/observation, catégories observées et probabilités des terciles |
@@ -94,7 +106,7 @@ Tester une requête sans télécharger : ajouter `--dry-run`.
 | `eccas_s2s.validate.pooled` | couples de tous les points de grille d'une zone, pour les diagrammes |
 | `eccas_s2s.validate.r_bridge` + `zone_diagrams.R` | diagrammes de fiabilité et ROC avec le paquet R `verification` (`zone_scores.R` ne sert plus qu'au contrôle croisé Python ↔ R des tests) |
 | `eccas_s2s.viz.ceeac_maps` | cartes à la charte CAPC-AC (shapefile CEEAC, logo, barre de couleur commune) |
-| `eccas_s2s.operations.*` | étapes opérationnelles (`run(...)` + `main(argv)`) : `download_c3s`, `qc_c3s`, `obs_chirps`, `c3s_totals`, `c3s_temperature`, `skill_raw`, `skill_diagrams`, `plot_skill_raw`, `calibrate_hindcast`, `housekeeping` |
+| `eccas_s2s.operations.*` | étapes opérationnelles (`run(...)` + `main(argv)`) : `download_c3s`, `qc_c3s`, `obs_chirps`, `c3s_totals`, `c3s_temperature`, `skill_raw`, `skill_diagrams`, `plot_skill_raw`, `calibrate_hindcast`, `multimodel`, `plot_multimodel`, `skill_multimodel`, `season_share`, `download_chirps`, `housekeeping` |
 
 Les modules historiques (`eccas_s2s.config`, `core.processing`, `pipeline`) sont conservés tels quels.
 
@@ -164,8 +176,16 @@ la calibration.
   Sahel a le même gain médian qu'une méthode qui ne fait rien.
 - **Méthode recommandée** : elle doit améliorer la maille typique **et** au moins la moitié du
   masque ; la retenue est celle du plus fort gain médian, départagée par la surface réparée. Si
-  aucune ne qualifie, la recommandation est `raw` et le registre écrit pourquoi. Registre :
-  `registry/calibration_methods.csv`.
+  aucune ne qualifie, la recommandation est `raw` et le registre écrit pourquoi. Un gain
+  inférieur à 1e-6 est une **égalité** et ne compte jamais comme amélioration : là où une
+  méthode laisse le score inchangé, la différence n'est que du bruit d'arrondi. Registre :
+  `registry/<YYYYMM>/calibration_methods.csv` — la méthode qui convient dépend du mois
+  d'initialisation, chaque cycle a donc le sien.
+- **Runs partiels et reprises.** La synthèse et la comparaison sont **fusionnées** d'un run à
+  l'autre : relancer un modèle remplace ses lignes et garde celles des autres, et le registre est
+  recalculé sur toute la comparaison du cycle. Après un run interrompu, `--rebuild-tables`
+  reconstruit synthèse, comparaison et registre depuis les netCDF de scores déjà écrits, sans
+  réajuster aucune méthode ; on relance ensuite les seuls modèles manquants (`--models`).
 - **Sorties**, en miroir de l'arbre brut, avec un niveau `<méthode>` de plus :
   `skill/<cycle>/calibrated/netcdf/<système>_<modèle>/<échelle>/<variable>/<produit>/<méthode>/<métrique>.nc`.
   Les cartes (`--kind calibrated`) et les diagrammes (`--kind calibrated`) ne tracent par défaut
@@ -179,6 +199,28 @@ la calibration.
 | E5 · cartes calibrées | `python scripts/run_plot_skill_raw.py --config ... --kind calibrated` |
 | E5 · diagrammes calibrés | `python scripts/run_skill_diagrams.py --config ... --kind calibrated` |
 | E5 · cartes de gain (calibré − brut) | `python scripts/run_plot_skill_raw.py --config ... --kind gain --products terciles` |
+| E5 · reprise : tables et registre depuis les netCDF, sans recalcul | `python scripts/run_calibrate_hindcast.py --config ... --rebuild-tables` |
+| E5 · compléter un modèle manquant | `python scripts/run_calibrate_hindcast.py --config ... --models ncep --periods all-months all-seasons` |
+
+## Multi-modèle (phase P6)
+
+- **On combine les produits, pas les distributions.** Chaque modèle produit son cumul, son
+  anomalie, ses probabilités, ses dépassements et son SPI ; le multi-modèle en est la moyenne
+  pondérée. En **calibré**, chaque modèle entre avec la méthode que le registre du cycle lui
+  recommande **pour ce produit**.
+- **Trois schémas de poids** : `equal` (référence, comme `run_forecast_v2`), `sqrt_members`
+  (∝ √ du nombre de membres) et `skill` (∝ skill hindcast LOYO du produit : RPSS médian, ou la
+  discrimination si moins de trois modèles ont un RPSS positif ; poids égaux sinon).
+- **Décades** : combinées sur les sept modèles qui ont un flux journalier (pas NCEP).
+- **Vérification** : le multi-modèle est noté par la chaîne qui note les modèles (mêmes
+  produits, métriques, cartes et diagrammes), pour chaque schéma, en brut et en calibré, sous le
+  système `mme`. Ses lignes entrent dans les synthèses, jamais dans les registres. Les poids du
+  schéma `skill` sont ceux de tout le hindcast : sa vérification est légèrement optimiste.
+- **Cartes de prévision** : règles d'affichage de `run_forecast_v2`, produit par produit ;
+  probabilités en tranches de 5 % plafonnées à 90 %, blanches sous 35 % (« No dominant
+  Class ») ; cumuls et anomalies en `contourf`, probabilités en `pcolormesh` gouraud (lissage
+  d'affichage, aucune valeur interpolée) ; masque sec « dry mask » ; noms courts des modèles en
+  pied, avec la méthode de calibration et, pour le schéma `skill`, le poids de chacun.
 
 ## Format des netCDF (CF-1.8)
 
@@ -217,6 +259,12 @@ python scripts/run_housekeeping.py --config config/cycle_202609.yaml --to-cf
 
 ## Conventions à retenir
 
+- **Masque de saison sèche** (`precip.dry_mask` dans `thresholds.yaml`, `--dry-mask` à
+  l'exécution) : par défaut le critère de l'**IRI** (12/11/2026, commun avec l'étude
+  ENSO–CEEAC) — une maille est sèche pour la période quand sa normale 1991–2020 est inférieure
+  à 15 % de son total annuel normal **ou** à 30 mm, seuils donnés pour trois mois et mis à
+  l'échelle de la période (un tiers pour un mois, jours/91,3 pour une décade). Le masque se lit
+  dans la **climatologie** de la maille, pas dans la prévision.
 - **Dates des cumuls C3S :** le champ de l'échéance +24 h (daté du 2 à 00 UTC) contient la pluie du **1er**. L'ancienne chaîne décalait toutes les périodes d'un jour ; la chaîne OSF les aligne sur le calendrier des observations. Voir le notebook 00, section 4.
 - **Périodes complètes uniquement :** une période qui dépasse l'horizon du modèle n'est pas produite.
 - **Indicateurs de saison :** produits seulement si toute leur fenêtre de référence est dans la prévision ; une fenêtre déjà commencée n'est pas complétée avec des observations.
@@ -279,7 +327,7 @@ Deux familles :
 | `pedagogiques/01_observations_chirps.ipynb` | pédagogique | QC CHIRPS, cumuls calendaires, normales et percentiles par maille, passage à 1°, sensibilité à la période de référence |
 | `pedagogiques/02_cumuls_c3s.ipynb` | pédagogique | cumuls C3S par période, biais de moyenne et de variabilité des modèles bruts |
 | `operationnels/OP_01_telechargement_qc_c3s.ipynb` | opérationnel | téléchargement C3S + contrôle qualité + horizon commun |
-| `operationnels/OP_02_reference_chirps.ipynb` | opérationnel | archive CHIRPS + normales (idempotent) |
+| `operationnels/OP_02_reference_chirps.ipynb` | opérationnel | mise à jour de l'année CHIRPS en cours, puis archive + normales (idempotent) |
 | `pedagogiques/03_temperature_nmme.ipynb` | pédagogique | référence ERA5, percentiles extrêmes par maille, biais de température des modèles, NMME |
 | `operationnels/OP_03_cumuls_c3s.ipynb` | opérationnel | cumuls C3S par période |
 | `operationnels/OP_04_reference_temperature_era5.ipynb` | opérationnel | téléchargement ERA5 horaire → journalier, archive et normales |
@@ -288,7 +336,7 @@ Deux familles :
 | `operationnels/OP_07_skill_brut.ipynb` | opérationnel | scores bruts, cartes et diagrammes (P2) |
 | `pedagogiques/04_skill_brut.ipynb` | pédagogique | lecture des scores bruts, cartes et diagrammes |
 | `pedagogiques/05_calibration.ipynb` | pédagogique | pourquoi une méthode par produit, lire un gain sans se tromper, pourquoi l'anomalie et le SPI restent bruts |
-| `operationnels/OP_08_calibration.ipynb` | opérationnel | calibration, scores calibrés, comparaison, registre, cartes de gain et diagrammes |
+| `operationnels/OP_08_calibration.ipynb` | opérationnel | calibration, scores calibrés, comparaison, registre du cycle, cartes de gain et diagrammes ; `RECONSTRUIRE = True` pour reprendre après une interruption |
 
 ## Git
 
