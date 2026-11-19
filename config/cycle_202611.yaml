@@ -1,0 +1,147 @@
+# =============================================================================
+# eccas-s2s — Chaîne OSF CAPC-AC
+# Configuration du cycle opérationnel : initialisation du 1er septembre 2026
+# =============================================================================
+# Ce fichier pilote TOUTE exécution de la chaîne pour ce cycle (règle R2 du
+# workflow). Une copie en est écrite dans le manifeste de chaque exécution.
+# Pour un nouveau mois : copier ce fichier en cycle_YYYYMM.yaml et adapter
+# `cycle.init_date` et, si nécessaire, les numéros de système C3S.
+# =============================================================================
+
+cycle:
+  init_date: "2026-11-01"          # date d'initialisation des prévisions
+  name: "OSF CAPC-AC — initialisation Novembre 2026"
+
+# Fichiers de configuration partagés par tous les cycles (chemins relatifs à
+# ce fichier).
+includes:
+  domains: domains.yaml
+  thresholds: thresholds.yaml
+  agro_calendars: agro_calendars.yaml
+
+paths:
+  # Données brutes immuables (téléchargements) — hors du dépôt git.
+  data_root: /home/ludric/Downloads/SVM/Previsions_S2S/DATA_OSF
+  # Sorties de travail (produits, scores, journaux d'exécution).
+  output_root: /home/ludric/Downloads/SVM/Previsions_S2S/OUTPUTS_OSF
+  # Archive des prévisions émises (prérequis de la vérification temps réel).
+  archive_root: /home/ludric/Downloads/SVM/Previsions_S2S/ARCHIVE_OSF
+  shapefile: /home/ludric/Desktop/Donnees_calibration_c3s/pays_cceac_shapefile/ceeac_pays_adm1.shp
+  logo: /home/ludric/Desktop/Donnees_calibration_c3s/pays_cceac_shapefile/logo_creuw_eccas_undrr.png
+
+# Échelles temporelles des produits (décision D8).
+scales: [decade, month, season]
+
+# Horizon commun à tous les modèles (décision du 23/09/2026).
+# Le produit mensuel C3S ne propose que 6 mois d'échéance pour UKMO, BoM et NCEP
+# (leadtime_month 7 refusé par le CDS, HTTP 400) : au-delà, ces trois modèles
+# n'auraient plus de mois ni de saison. On aligne donc tout le monde sur 6 mois
+# d'échéance, soit jusqu'à février 2027 et DJF pour une initialisation de
+# septembre. Une période est retenue si month_offset + n_months <= 6.
+horizon:
+  max_lead_months: 6
+
+# Sous-ensemble de travail pour le DÉVELOPPEMENT uniquement : les deux premières
+# périodes de chaque échelle, ce qui suffit à exercer toute la chaîne pour une
+# fraction du temps de calcul. En exploitation ce bloc est retiré (ou les scripts
+# sont lancés avec --all-periods) et le prévisionniste choisit ses périodes.
+development:
+  periods_per_scale: {decade: 2, month: 2, season: 2}
+
+# Variables traitées (décision D5). La V1 démarre par la pluie ; la température
+# est ajoutée en phase P1.
+variables: [precip, t2m, tmax, tmin]
+
+# Périodes de référence (décisions D4 et D12).
+reference_periods:
+  c3s_fit: [1993, 2016]      # ajustement modèle C3S <-> observations
+  obs_normal: [1991, 2020]   # seuils de catégories communs + anomalies
+
+cross_validation:
+  scheme: loyo               # leave-one-year-out (décision D10)
+
+observations:
+  precip:
+    source: CHIRPS
+    version: "2.0"
+    # CHIRPS est pris dans son produit 0.25° (p25), la résolution à laquelle
+    # travaille la calibration (P3) : pas d'agrégation intermédiaire à justifier.
+    resolution_deg: 0.25
+    daily_paths:
+      - /home/ludric/Downloads/SVM/Previsions_S2S/DATA_OSF/raw/chirps/daily_p25/chirps-v2.0.*.days_p25_ECCAS.nc
+  temperature:
+    # T2m moyenne, maximum et minimum journaliers calculés à partir de la T2m
+    # horaire ERA5 (jours UTC), voir operations/download_era5_hourly.py.
+    source: ERA5
+    resolution_deg: 0.25
+    daily_paths:
+      - /home/ludric/Downloads/SVM/Previsions_S2S/DATA_OSF/raw/era5/hourly_0p25/era5_t2m_daily_*.nc
+
+systems:
+  c3s:
+    dataset: seasonal-original-single-levels
+    hindcast_years: [1993, 2016]
+    # Zone de téléchargement (lon_min, lon_max, lat_min, lat_max) : plus large
+    # que le domaine des observations pour les bords du regrillage.
+    download_area: [-10, 40, -25, 30]
+    # Jeu mensuel, utilisé pour les modèles à ensemble décalé (voir plus bas).
+    monthly_dataset: seasonal-monthly-single-levels
+    # Systèmes valides pour une initialisation au 1er septembre 2026 (repris
+    # de seasonal_engine v10). max_lead_days = horizon quotidien disponible.
+    #
+    # `precip_from` indique le flux qui alimente la PLUIE à chaque échelle
+    # (décision du 24/09/2026, après comptage des membres sur le CDS) :
+    #
+    #   modèle        quotidien (prév./hind.)   mensuel (prév./hind.)
+    #   ecmwf              51 / 25                  51 / 25      identiques
+    #   meteo_france       51 / 31                  51 / 31      identiques
+    #   dwd                50 / 30                  50 / 30      identiques
+    #   cmcc               50 / 30                  50 / 30      identiques
+    #   eccc               20 / 20                  20 / 20      identiques
+    #   ukmo                2 / 7                   62 / 28      ensemble décalé
+    #   bom                11 / 3                  121 / 27      ensemble décalé
+    #   ncep                4 / (aucun)            124 / 24      ensemble décalé
+    #
+    # UKMO, BoM et NCEP démarrent leurs membres à des jours différents du mois :
+    # le flux quotidien du 1er n'en livre qu'une poignée. Ils passent donc au
+    # mensuel pour les mois et les saisons, et gardent le quotidien pour les
+    # décades (NCEP n'a pas de hindcast quotidien : pas de décades pour lui).
+    models:
+      ecmwf:        {system: "51",  label: "ECMWF SEAS5.1",      max_lead_days: 215,
+                     precip_from: {decade: daily, month: daily, season: daily}}
+      ukmo:         {system: "610", label: "UKMO GloSea",        max_lead_days: 215,
+                     precip_from: {decade: daily, month: monthly, season: monthly}}
+      meteo_france: {system: "9",   label: "Météo-France Sys 9", max_lead_days: 212,   # 215 demandés, 212 reçus
+                     precip_from: {decade: daily, month: daily, season: daily}}
+      dwd:          {system: "22",  label: "DWD GCFS2.2",        max_lead_days: 181,   # 184 demandés, 181 reçus (→ 28 févr.)
+                     precip_from: {decade: daily, month: daily, season: daily}}
+      cmcc:         {system: "4",   label: "CMCC SPS4",          max_lead_days: 184,
+                     precip_from: {decade: daily, month: daily, season: daily}}
+      eccc:         {system: "5",   label: "ECCC GEM5.2-NEMO",   max_lead_days: 214,
+                     precip_from: {decade: daily, month: daily, season: daily}}
+      bom:          {system: "2",   label: "BoM ACCESS-S2",      max_lead_days: 215,
+                     precip_from: {decade: daily, month: monthly, season: monthly}}
+      ncep:         {system: "2",   label: "NCEP CFSv2",         max_lead_days: 215,
+                     precip_from: {month: monthly, season: monthly}}   # pas de hindcast quotidien
+  nmme:
+    # DÉSACTIVÉ le 23/09/2026 : le serveur NOAA/CPC ne sert que la moyenne
+    # d'ensemble, sans les membres, donc aucune probabilité brute n'est possible
+    # (décision D22) et la calibration seule pourrait leur en donner. Le
+    # développement de l'outil se fait sans NMME ; le code de lecture et de
+    # téléchargement est conservé pour y revenir dès qu'une source fournissant
+    # les membres (IRIDL, archives des centres) aura été identifiée.
+    enabled: false
+    # Source : serveur NOAA/CPC (fichiers servis à CPT), un dossier par mois
+    # d'initialisation, une moyenne d'ensemble (ENSMEAN) par modèle, variable et
+    # année. Les membres individuels ne sont pas fournis. Mensuel uniquement :
+    # mois et saisons (décision D4 : toute la période de hindcast disponible).
+    source: cpc
+    base_url: https://ftp.cpc.ncep.noaa.gov/International/nmme/netcdf
+    variables: [prate, tmp2m, tmpsfc]   # pluie (mm/s), T2m (K), SST (K, prédicteur)
+    models:
+      CFSv2:        {label: "NCEP CFSv2"}
+      NASA_GEOS5v2: {label: "NASA GEOS-S2S v2"}
+      NCAR_CCSM4:   {label: "COLA-RSMAS CCSM4"}
+      CanESM5:      {label: "ECCC CanESM5"}
+      GEM5.2_NEMO:  {label: "ECCC GEM5.2-NEMO"}
+      NCAR_CESM1:   {label: "NCAR CESM1"}
