@@ -76,7 +76,15 @@ def _recommended_methods(cfg) -> dict:
     return {tuple(row[k] for k in keys): row["method"] for _, row in table.iterrows()}
 
 
+#: how a weighting scheme is named in the title of a multi-model skill map
+MME_LABEL = {"equal": "Multi-modèle — poids égaux",
+             "sqrt_members": "Multi-modèle — poids ∝ √(membres)",
+             "skill": "Multi-modèle — poids ∝ skill"}
+
+
 def _model_label(cfg, system: str, model: str) -> str:
+    if system == "mme":
+        return MME_LABEL.get(model, f"Multi-modèle — {model}")
     if system == "c3s" and model in cfg.c3s_models:
         return cfg.c3s_models[model].label
     return cfg.raw["systems"]["nmme"]["models"].get(model, {}).get("label", model)
@@ -84,9 +92,16 @@ def _model_label(cfg, system: str, model: str) -> str:
 
 #: diagnostics kept beside the scores in the netCDF, never drawn as a skill map
 NOT_A_SCORE = ("n_years", "base_rate")
+#: metrics drawn beside the deciding one, product by product. The terciles are
+#: the flagship product of a seasonal forecast, and the two maps answer two
+#: different questions: the RPSS says whether the probabilities can be used as
+#: they are, the GROC whether the forecast separates the years it should —
+#: signal that a calibration can recover even when the RPSS is negative.
+ALSO_DRAWN = {"terciles": ("groc",)}
 
 
-def _metrics_of(folder, deciding: str, wanted, kind: str = "raw") -> list[str]:
+def _metrics_of(folder, deciding: str, wanted, kind: str = "raw",
+                product: str = "") -> list[str]:
     """Which metric files of a product folder to draw."""
     available = [f.stem for f in sorted(folder.glob("*.nc")) if f.stem not in NOT_A_SCORE]
     if kind == "gain":
@@ -97,14 +112,15 @@ def _metrics_of(folder, deciding: str, wanted, kind: str = "raw") -> list[str]:
                                               if m.replace("gain_", "") in set(wanted)]
     available = [m for m in available if not m.startswith("gain_")]
     if wanted in (None, "deciding"):
-        return [m for m in available if m == deciding]
+        keep = {deciding, *ALSO_DRAWN.get(product, ())}
+        return [m for m in available if m in keep]
     if wanted == "all":
         return available
     return [m for m in available if m in set(wanted)]
 
 
 def run(config: str, metrics="deciding", scales=None, variables=None, models=None,
-        systems=("c3s", "nmme"), products=None, kind: str = "raw",
+        systems=("c3s", "nmme", "mme"), products=None, kind: str = "raw",
         methods=None) -> RunContext:
     """
     Draw the skill maps of one tree.
@@ -161,7 +177,7 @@ def run(config: str, metrics="deciding", scales=None, variables=None, models=Non
             # attribute `label` holds the period labels, not the product's
             product_label = _product_label(cfg, variable, scale, product)
 
-            for metric in _metrics_of(folder, deciding, metrics, kind):
+            for metric in _metrics_of(folder, deciding, metrics, kind, product):
                 f = folder / f"{metric}.nc"
                 if not f.exists():
                     continue
@@ -220,7 +236,8 @@ def main(argv=None):
     ap.add_argument("--scales", nargs="+", choices=["decade", "month", "season"])
     ap.add_argument("--variables", nargs="+", choices=["precip", "t2m", "tmax", "tmin"])
     ap.add_argument("--models", nargs="+")
-    ap.add_argument("--systems", nargs="+", default=["c3s", "nmme"], choices=["c3s", "nmme"])
+    ap.add_argument("--systems", nargs="+", default=["c3s", "nmme", "mme"],
+                    choices=["c3s", "nmme", "mme"])
     args = ap.parse_args(argv)
     metrics = args.metrics[0] if len(args.metrics) == 1 else tuple(args.metrics)
     run(args.config, metrics, args.scales, args.variables, args.models, args.systems,

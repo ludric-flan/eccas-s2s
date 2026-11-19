@@ -367,8 +367,12 @@ def _write_calibrated_outputs(cfg, ctx, skill_root, summary_rows, comparison_row
                             "method", "period"]).to_csv(path, index=False)
     ctx.record_output(path, role="comparison")
 
-    # la méthode recommandée se décide sur la métrique qui décide pour le produit
-    register = recommend(comparison[comparison["deciding"]], min_improved=min_improved)
+    # la méthode recommandée se décide sur la métrique qui décide pour le produit,
+    # et seulement pour les modèles : le multi-modèle n'a pas de méthode propre,
+    # chacun de ses membres entrant avec celle que ce registre lui recommande
+    deciding = comparison[comparison["deciding"]]
+    register = recommend(deciding[deciding.get("system", "c3s") != "mme"],
+                         min_improved=min_improved)
     reg_dir = cfg.path_of("output_root") / "registry"
     reg_dir.mkdir(parents=True, exist_ok=True)
     path = reg_dir / "calibration_methods.csv"

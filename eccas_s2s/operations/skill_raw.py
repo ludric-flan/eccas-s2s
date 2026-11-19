@@ -414,7 +414,10 @@ def _write_summary(cfg, ctx, out: Path, rows: list[dict],
     table.to_csv(f, index=False)
     ctx.record_output(f, role="summary")
 
-    register = eligibility_table(table, min_fraction)
+    # le registre répond à « quel modèle peut entrer dans le workflow » : un
+    # multi-modèle en est une sortie, pas une entrée, et ses lignes restent dans
+    # la synthèse sans entrer dans l'admission
+    register = eligibility_table(table[table["system"] != "mme"], min_fraction)
     reg_dir = cfg.path_of("output_root") / "registry"
     reg_dir.mkdir(parents=True, exist_ok=True)
     f = reg_dir / "products_eligibility.csv"

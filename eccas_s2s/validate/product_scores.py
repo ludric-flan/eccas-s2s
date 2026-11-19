@@ -307,6 +307,96 @@ def _value_pair(dist, ctx: ObservationContext, product, cache: dict):
     return cache["spi"], ctx.spi
 
 
+def forecast_field(dist, ctx: ObservationContext, product, cache: dict | None = None):
+    """
+    The quantity of one product, as it is scored — and as it is combined.
+
+    A value product gives its value (the total, or the SPI on its own scale), a
+    three-category product its three probabilities, an event its probability.
+    The multi-model averages exactly these arrays, so the numbers a combination
+    is scored on are the numbers its models were scored on.
+    """
+    cache = {} if cache is None else cache
+    if product.kind == VALUE:
+        return _value_pair(dist, ctx, product, cache)[0]
+    return product_probabilities(dist, ctx, product, cache)[0]
+
+
+def observed_of(ctx: ObservationContext, product):
+    """Observed counterpart of a product: the value, the category index or the 0/1 event."""
+    if product.kind == VALUE:
+        return ctx.spi if product.name == "spi" else ctx.obs
+    if product.name == "terciles":
+        return ctx.obs_cat
+    if product.name == "spi_classes":
+        return ctx.spi_classes
+    threshold, above = ctx.events[product.name]
+    occurred = (ctx.obs > threshold) if above else (ctx.obs < threshold)
+    return occurred.astype(float).where(ctx.obs.notnull())
+
+
+def score_one(product, forecast, observed, ctx: ObservationContext, metrics,
+              n_members: int | None = None, det=None):
+    """
+    The metrics of one product, from its forecast quantity and its observation.
+
+    The single place where a score is computed in the chain: a model, a
+    calibration method and a multi-model all come through here, which is what
+    makes their numbers comparable. ``det`` carries the deterministic scores
+    already computed for the total, so that the anomaly — which differs from it
+    by a constant every skill score removes — does not pay for them twice.
+    """
+    year_dim = ctx.year_dim
+    has_members = n_members is not None and n_members > 1
+    fields: dict = {}
+
+    if product.kind == VALUE:
+        if product.name in ("cumul", "anomalie"):
+            det = det if det is not None else deterministic_scores(
+                forecast, observed, year_dim, climatology=ctx.climatology)
+            scores = det
+        else:                                     # SPI: scored on the SPI scale
+            scores = deterministic_scores(forecast, observed, year_dim,
+                                          climatology=loyo_mean(observed, dims=[],
+                                                                year_dim=year_dim))
+        fields = {m: scores[m] for m in metrics if m in scores}
+        n_years = scores["n_years"]
+
+    elif product.kind == CATEGORIES:
+        rps = rps_scores(forecast, observed, year_dim,
+                         n_members=n_members if has_members else None)
+        for m in metrics:
+            if m in rps:
+                fields[m] = rps[m]
+            elif m == "groc":
+                fields[m] = groc(forecast, observed, year_dim)
+            elif m == "roc_area":
+                per_cat = [roc_area((forecast.sel(category=c)),
+                                    (observed == i).astype(float).where(observed.notnull()),
+                                    year_dim) for i, c in enumerate(forecast["category"].values)]
+                fields[m] = xr.concat(per_cat, dim=forecast["category"])
+        n_years = rps["n_years"]
+
+    else:                                          # EVENT
+        brier = brier_scores(forecast, observed, observed.mean(year_dim), year_dim,
+                             n_members=n_members if has_members else None)
+        for m in metrics:
+            if m in brier:
+                fields[m] = brier[m]
+            elif m == "roc_skill":
+                # area - 0.5: positive means "better than chance", like every
+                # other metric of the register
+                fields[m] = roc_area(forecast, observed, year_dim) - 0.5
+        fields.setdefault("base_rate", brier["base_rate"])
+        n_years = brier["n_years"]
+
+    if not fields:
+        return None, det
+    ds = xr.Dataset(fields)
+    ds["n_years"] = n_years
+    return ds, det
+
+
 def product_maps(dist, ctx: ObservationContext, mode: str = "deciding",
                  n_members: int | None = None, kinds=None, products=None) -> dict[str, xr.Dataset]:
     """
@@ -318,7 +408,6 @@ def product_maps(dist, ctx: ObservationContext, mode: str = "deciding",
     the catalogue by name — phase P3 uses it to score a method only on the
     products it can answer (:mod:`eccas_s2s.calibrate.products`).
     """
-    year_dim = ctx.year_dim
     has_members = hasattr(dist, "members") and dist.members.sizes.get(
         getattr(dist, "member_dim", MEMBER), 1) > 1
     out: dict[str, xr.Dataset] = {}
@@ -333,61 +422,53 @@ def product_maps(dist, ctx: ObservationContext, mode: str = "deciding",
         metrics = wanted_metrics(product, mode, has_members)
         if not metrics:
             continue
-        fields: dict[str, xr.DataArray] = {}
-
-        if product.kind == VALUE:
-            forecast, reference = _value_pair(dist, ctx, product, cache)
-            if product.name in ("cumul", "anomalie"):
-                det = det if det is not None else deterministic_scores(
-                    forecast, reference, year_dim, climatology=ctx.climatology)
-                scores = det
-            else:                                     # SPI: scored on the SPI scale
-                scores = deterministic_scores(forecast, reference, year_dim,
-                                              climatology=loyo_mean(reference, dims=[],
-                                                                    year_dim=year_dim))
-            fields = {m: scores[m] for m in metrics if m in scores}
-            n_years = scores["n_years"]
-
-        elif product.kind == CATEGORIES:
-            prob, observed = product_probabilities(dist, ctx, product, cache)
-            rps = rps_scores(prob, observed, year_dim,
-                             n_members=n_members if has_members else None)
-            for m in metrics:
-                if m in rps:
-                    fields[m] = rps[m]
-                elif m == "groc":
-                    fields[m] = groc(prob, observed, year_dim)
-                elif m == "roc_area":
-                    per_cat = [roc_area((prob.sel(category=c)),
-                                        (observed == i).astype(float).where(observed.notnull()),
-                                        year_dim) for i, c in enumerate(prob["category"].values)]
-                    fields[m] = xr.concat(per_cat, dim=prob["category"])
-            n_years = rps["n_years"]
-
-        else:                                          # EVENT
-            prob, occurred = product_probabilities(dist, ctx, product, cache)
-            brier = brier_scores(prob, occurred, occurred.mean(year_dim), year_dim,
-                                 n_members=n_members if has_members else None)
-            for m in metrics:
-                if m in brier:
-                    fields[m] = brier[m]
-                elif m == "roc_skill":
-                    # area - 0.5: positive means "better than chance", like every
-                    # other metric of the register
-                    fields[m] = roc_area(prob, occurred, year_dim) - 0.5
-            fields.setdefault("base_rate", brier["base_rate"])
-            n_years = brier["n_years"]
-
-        if not fields:
+        forecast = forecast_field(dist, ctx, product, cache)
+        observed = (ctx.obs_cat if product.name == "terciles" else
+                    ctx.spi_classes if product.name == "spi_classes" else
+                    observed_of(ctx, product))
+        ds, det = score_one(product, forecast, observed, ctx, metrics,
+                            n_members if has_members else None, det)
+        if ds is None:
             continue
-        ds = xr.Dataset(fields)
-        ds["n_years"] = n_years
         ds.attrs = {"product": product.name, "label": product.label, "kind": product.kind,
                     "deciding": product.metric, "event": product.event,
                     "own_climatology": int(bool(getattr(dist, "uses_own_climatology", False))
                                            and (product.name in OWN_QUANTILE
                                                 or product.name in ("terciles", "spi_classes",
                                                                     "spi")))}
+        out[product.name] = ds
+    return out
+
+
+def score_fields(fields: dict, ctx: ObservationContext, mode: str = "deciding",
+                 n_members: int | None = None, products=None) -> dict[str, xr.Dataset]:
+    """
+    Score maps of products that are **already formed**, product by product.
+
+    The multi-model combines products, not distributions (decision of
+    26/09/2026), so it has no ``dist`` to be read: its tercile probabilities are
+    the weighted mean of eight tercile probabilities. It is scored here, through
+    :func:`score_one` — the same metrics, the same observation context and the
+    same no-skill values as a model — which is what lets its rows sit in the
+    summary table of phases P2 and P3 beside the models it combines.
+    """
+    out: dict[str, xr.Dataset] = {}
+    det = None
+    for product in ctx.products:
+        if product.name not in fields:
+            continue
+        if products is not None and product.name not in products:
+            continue
+        metrics = wanted_metrics(product, mode, n_members is not None and n_members > 1)
+        if not metrics:
+            continue
+        ds, det = score_one(product, fields[product.name], observed_of(ctx, product), ctx,
+                            metrics, n_members, det)
+        if ds is None:
+            continue
+        ds.attrs = {"product": product.name, "label": product.label, "kind": product.kind,
+                    "deciding": product.metric, "event": product.event,
+                    "own_climatology": 0}
         out[product.name] = ds
     return out
 
