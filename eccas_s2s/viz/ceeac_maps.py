@@ -20,6 +20,8 @@ import numpy as np
 from matplotlib.colors import BoundaryNorm, ListedColormap
 from matplotlib.offsetbox import AnchoredOffsetbox, OffsetImage
 
+from eccas_s2s.viz.offscreen import offscreen_when_saved
+
 DEFAULT_EXTENT = (4.0, 36.0, -21.0, 25.0)
 DPI = 200
 
@@ -44,6 +46,11 @@ def load_boundaries(shapefile: str):
     return countries, regions
 
 
+#: drawing order of the region and country outlines: above every painted layer
+BOUNDARY_ZORDER = 3.0
+
+
+
 def add_boundaries(ax, shapefile: str | None):
     """
     Draw regions (grey, thin) then countries (black), as in the reference chain.
@@ -58,8 +65,14 @@ def add_boundaries(ax, shapefile: str | None):
     import cartopy.crs as ccrs
 
     countries, regions = load_boundaries(str(shapefile))
-    regions.boundary.plot(ax=ax, color="gray", linewidth=0.5, transform=ccrs.PlateCarree())
-    countries.boundary.plot(ax=ax, color="black", linewidth=1.0, transform=ccrs.PlateCarree())
+    # the outlines sit above everything painted on the map — product, categories
+    # and the dry mask (zorder 1.4 to 2.0): a reader must still find the region
+    # under a grey dry cell (the dry mask of the tercile maps hid them until
+    # 20/11/2026)
+    regions.boundary.plot(ax=ax, color="gray", linewidth=0.5, transform=ccrs.PlateCarree(),
+                          zorder=BOUNDARY_ZORDER)
+    countries.boundary.plot(ax=ax, color="black", linewidth=1.0, transform=ccrs.PlateCarree(),
+                            zorder=BOUNDARY_ZORDER + 0.1)
 
 
 def add_logo(ax, logo_path: str | None, zoom: float = 0.18, loc: str = "upper right"):
@@ -128,6 +141,7 @@ def _norm(levels, cmap, extend):
     return BoundaryNorm(levels, cm.N, extend=extend), cm
 
 
+@offscreen_when_saved
 def map_field(field, *, shapefile=None, logo=None, extent=DEFAULT_EXTENT, cmap="viridis",
               levels=None, vmin=None, vmax=None, extend="both", title="", cbar_label="",
               hatch_where=None, output_path=None, figsize=(9, 8)):
@@ -162,6 +176,7 @@ def map_field(field, *, shapefile=None, logo=None, extent=DEFAULT_EXTENT, cmap="
     return fig
 
 
+@offscreen_when_saved
 def map_panel(fields, titles, *, shapefile=None, logo=None, extent=DEFAULT_EXTENT,
               cmap="viridis", levels=None, vmin=None, vmax=None, extend="both", ncols=None,
               cbar_label="", suptitle="", output_path=None, panel_width=3.6):
@@ -537,6 +552,7 @@ def _layout(extent, title: str, subtitle: str, caption: str, map_width: float,
             "centre": (left + ax_w / 2) / fig_w}
 
 
+@offscreen_when_saved
 def map_score(field, *, metric: str, variable: str = "precip", shapefile=None, logo=None,
               extent=DEFAULT_EXTENT, title="", subtitle="", caption=None, output_path=None,
               map_width: float = 5.4, shading: str = "gouraud", style=None):
@@ -646,6 +662,7 @@ SPI_CLASS_COLORS = {"BN": _ramp("Oranges"), "NN": _ramp("Greens"), "AN": _ramp("
 SPI_CLASS_LABEL = {"BN": "SPI sec (< −1)", "NN": "SPI normal", "AN": "SPI humide (> +1)"}
 
 
+@offscreen_when_saved
 def map_tercile_forecast(prob, *, variable="precip", shapefile=None, logo=None,
                          extent=DEFAULT_EXTENT, title="", subtitle="", output_path=None,
                          dry_mask=None, map_width: float = 5.4, category_dim="category",
@@ -943,6 +960,7 @@ def _product_norm(style: dict):
     return cmap, BoundaryNorm(levels, 256, extend="neither")
 
 
+@offscreen_when_saved
 def map_product(field, *, product: str, scale: str, variable: str = "precip", dry=None,
                 shapefile=None, logo=None, extent=DEFAULT_EXTENT, title="", subtitle="",
                 caption=None, output_path=None, map_width: float = 5.4, style=None,

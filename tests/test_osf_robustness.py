@@ -198,3 +198,28 @@ def test_multi_scale_selection_works_scale_by_scale():
     assert cfg.periods_for(215, ("decade",), selection=both) == []
     with pytest.raises(SelectionError):                 # a typo still stops the step
         cfg.periods_for(215, ("month",), selection=["all-saisons"])
+
+
+# ------------------------------------------------- cartes écrites hors écran (Jupyter)
+def test_maps_written_to_file_are_drawn_offscreen():
+    """Incident of 20/11/2026: the inline backend held every map of a cell (OOM at 22 GB)."""
+    import matplotlib
+    import matplotlib.pyplot as plt
+
+    from eccas_s2s.viz.offscreen import offscreen_when_saved
+
+    seen = []
+
+    @offscreen_when_saved
+    def draw(field, output_path=None):
+        seen.append(matplotlib.is_interactive())
+
+    plt.ion()
+    try:
+        draw(1, output_path="carte.png")        # par mot-clé
+        draw(1, "carte.png")                    # en position
+        draw(1)                                 # pour l'écran : laissé tel quel
+        assert seen == [False, False, True]
+        assert matplotlib.is_interactive()       # rétabli après le tracé
+    finally:
+        plt.ioff()

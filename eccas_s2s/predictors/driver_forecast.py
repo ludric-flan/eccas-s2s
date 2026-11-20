@@ -43,6 +43,7 @@ import pandas as pd
 import xarray as xr
 
 from eccas_s2s.predictors.sst_indices import BOXES, DIPOLES, INDICES, LABELS
+from eccas_s2s.viz.offscreen import offscreen_when_saved
 
 MEMBER = "number"
 LEAD = "month_offset"
@@ -166,6 +167,7 @@ def hindcast_skill(model: xr.Dataset, observed: xr.Dataset) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+@offscreen_when_saved
 def plot_forecast(table: pd.DataFrame, skill: pd.DataFrame, driver: str, output_path,
                   init_date=None, logo=None):
     """
