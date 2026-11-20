@@ -135,3 +135,45 @@ def test_variables_list_and_aliases():
     assert canonical_variables(["t2m", "tmoy", "TMAX"]) == ["t2m", "tmax"]
     with pytest.raises(ValueError):
         canonical_variables(["precip", "vent"])
+
+
+# ---------------------------------------------------------------- QC des deux flux C3S
+from pathlib import Path  # noqa: E402
+
+from eccas_s2s.io.c3s_qc import (effective_horizons, inspect_c3s_file,  # noqa: E402
+                                 monthly_horizons, stream_of)
+
+RAW_09 = Path("/home/ludric/Downloads/SVM/Previsions_S2S/DATA_OSF/raw/c3s/202609")
+UKMO_MONTHLY_FC = RAW_09 / "c3s_ukmo_610_PRCP_forecast_2026_09_monthly.grib"
+
+
+def test_stream_is_read_from_the_file_name():
+    assert stream_of("c3s_ncep_2_PRCP_hindcast_1993_2016_11_monthly.grib") == "monthly"
+    assert stream_of("c3s_ecmwf_51_TMAX_forecast_2026_11.grib") == "daily"
+
+
+def test_horizons_are_split_by_stream():
+    qc = pd.DataFrame([
+        {"centre": "ukmo", "stream": "daily", "kind": "forecast", "horizon_all_years_days": 215,
+         "horizon_any_year_days": 215, "members": 2},
+        {"centre": "ukmo", "stream": "daily", "kind": "hindcast", "horizon_all_years_days": 215,
+         "horizon_any_year_days": 215, "members": 7},
+        {"centre": "ukmo", "stream": "monthly", "kind": "forecast",
+         "horizon_all_years_months": 6, "members": 62, "members_min": 62},
+        {"centre": "ukmo", "stream": "monthly", "kind": "hindcast",
+         "horizon_all_years_months": 5, "members": 28, "members_min": 26},
+    ])
+    daily = effective_horizons(qc).iloc[0]
+    assert (daily["usable_days"], daily["members_hindcast"]) == (215, 7)
+    monthly = monthly_horizons(qc).iloc[0]
+    assert (monthly["usable_months"], monthly["members_hindcast"],
+            monthly["members_hindcast_min"]) == (5, 28, 26)
+
+
+@pytest.mark.skipif(not UKMO_MONTHLY_FC.exists(), reason="fichier C3S mensuel absent")
+def test_monthly_file_is_controlled_with_its_lagged_members():
+    """UKMO: the monthly stream carries the lagged starts the daily one does not."""
+    row = inspect_c3s_file(UKMO_MONTHLY_FC)
+    assert row["stream"] == "monthly" and row["lagged_ensemble"]
+    assert row["members"] > 10 and row["start_dates"] > 1
+    assert row["horizon_all_years_months"] >= 6 and row["first_step_month"] == 0

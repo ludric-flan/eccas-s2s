@@ -32,7 +32,7 @@ Les cartes de scores par point de grille sont calculées en Python (`eccas_s2s.v
 | E2 · téléchargement C3S | `python scripts/run_download_c3s.py --config config/cycle_202611.yaml --variables precip tmoy` | P0 |
 | | *une ou plusieurs variables (`precip`, `t2m` ou `tmoy`, `tmax`, `tmin`), téléchargées l'une après l'autre, un manifeste chacune. Chaque modèle reçoit les flux déclarés par sa clé `precip_from` : journalier, mensuel, ou les deux. `--stream daily\|monthly` force un flux.* | |
 | E2 · contrôle qualité C3S | `python scripts/run_qc_c3s.py --config config/cycle_202611.yaml --variables precip tmax tmin` | P0 |
-| | *fichiers journaliers seulement : la T2m (flux mensuel) est sautée, les fichiers mensuels de UKMO, BoM et NCEP ne sont pas encore contrôlés.* | |
+| | *les deux flux, reconnus au nom du fichier : journalier (horizon en jours, comparé à `max_lead_days`) et mensuel (ensembles décalés regroupés comme à la lecture, membres comptés année par année, horizon en mois comparé à `horizon.max_lead_months`). Un flux attendu par la configuration (`precip_from`, T2m mensuelle) et absent est signalé.* | |
 | E1 · mise à jour de CHIRPS (année en cours, à chaque cycle) | `python scripts/run_download_chirps.py --config config/cycle_202611.yaml` | P1 |
 | | *sans `--years` : l'année du dernier mois écoulé. Une année incomplète est retéléchargée si UCSB a publié un fichier plus récent (date `Last-Modified`) ; une année complète, jamais. `--refresh` force.* | |
 | E1 · référence CHIRPS (archive + normales, seulement si CHIRPS a changé) | `python scripts/run_obs_chirps.py --config config/cycle_202609.yaml` | P1 |
