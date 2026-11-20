@@ -122,15 +122,26 @@ class CycleConfig:
         or several at a time. When it is given, the development subset of the
         configuration does not apply. ``full=True`` is the shorthand for
         ``selection="all"``.
+
+        The selection is checked against **every scale of the cycle**, then the
+        periods are restricted to the scales asked for. An operation that walks
+        the scales one by one (multi-model, its verification, the share of the
+        annual total) can therefore be given ``"all-months all-seasons"``: the
+        month pass simply finds no season to keep, instead of rejecting
+        ``all-seasons`` as unknown (incident of 20/11/2026). A selector that
+        matches no period of the cycle at all still stops the step.
         """
         from eccas_s2s.core.periods import ALL, build_periods, select_periods
 
-        periods = build_periods(self.init_date, horizon_days, tuple(scales or self.scales))
+        wanted = tuple(scales or self.scales)
+        every = tuple(dict.fromkeys(wanted + tuple(self.scales)))
+        periods = build_periods(self.init_date, horizon_days, every)
         if full and not selection:
             selection = ALL
-        return select_periods(periods, max_lead_months=self.max_lead_months,
-                              per_scale=self.periods_per_scale, selection=selection,
-                              init_year=self.init_date.year)
+        chosen = select_periods(periods, max_lead_months=self.max_lead_months,
+                                per_scale=self.periods_per_scale, selection=selection,
+                                init_year=self.init_date.year)
+        return [p for p in chosen if p.scale in wanted]
 
     def reference_period(self, key: str) -> tuple[int, int]:
         start, end = self.raw["reference_periods"][key]

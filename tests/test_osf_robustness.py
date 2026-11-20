@@ -177,3 +177,24 @@ def test_monthly_file_is_controlled_with_its_lagged_members():
     assert row["stream"] == "monthly" and row["lagged_ensemble"]
     assert row["members"] > 10 and row["start_dates"] > 1
     assert row["horizon_all_years_months"] >= 6 and row["first_step_month"] == 0
+
+
+# ------------------------------------------------- sélecteur et opérations échelle par échelle
+CYCLE_202611 = Path(__file__).resolve().parents[1] / "config" / "cycle_202611.yaml"
+
+
+@pytest.mark.skipif(not CYCLE_202611.exists(), reason="configuration du cycle 202611 absente")
+def test_multi_scale_selection_works_scale_by_scale():
+    """Incident of 20/11/2026: the month pass rejected "all-seasons" as unknown."""
+    from eccas_s2s.core.periods import SelectionError
+    from eccas_s2s.settings import load_cycle
+
+    cfg = load_cycle(str(CYCLE_202611))
+    both = ["all-months", "all-seasons"]
+    months = cfg.periods_for(215, ("month",), selection=both)
+    seasons = cfg.periods_for(215, ("season",), selection=both)
+    assert {p.scale for p in months} == {"month"} and len(months) == 6
+    assert {p.scale for p in seasons} == {"season"} and len(seasons) == 4
+    assert cfg.periods_for(215, ("decade",), selection=both) == []
+    with pytest.raises(SelectionError):                 # a typo still stops the step
+        cfg.periods_for(215, ("month",), selection=["all-saisons"])
