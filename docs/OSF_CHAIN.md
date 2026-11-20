@@ -337,6 +337,8 @@ Deux familles :
 | `pedagogiques/04_skill_brut.ipynb` | pédagogique | lecture des scores bruts, cartes et diagrammes |
 | `pedagogiques/05_calibration.ipynb` | pédagogique | pourquoi une méthode par produit, lire un gain sans se tromper, pourquoi l'anomalie et le SPI restent bruts |
 | `operationnels/OP_08_calibration.ipynb` | opérationnel | calibration, scores calibrés, comparaison, registre du cycle, cartes de gain et diagrammes ; `RECONSTRUIRE = True` pour reprendre après une interruption |
+| `operationnels/OP_09_multimodele.ipynb` | opérationnel | produits multi-modèles brut et calibré (3 schémas de poids), cartes de prévision, part du total annuel |
+| `operationnels/OP_10_verification_multimodele.ipynb` | opérationnel | vérification du multi-modèle (scores, cartes, diagrammes) et comparaison aux modèles seuls ; long en calibré (≈ 45 min par période) |
 
 ## Git
 
